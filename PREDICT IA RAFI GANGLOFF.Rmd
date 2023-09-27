@@ -1,0 +1,3521 @@
+---
+title: "SCRIPT THESE SONIA RAFI"
+---
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(eval = FALSE)
+```
+# Packages: installation
+
+```{r eval=FALSE, include=FALSE}
+install.packages("lubridate")
+install.packages("skimr")
+install.packages("infer")
+install.packages("expss")
+install.packages("htmlwidgets")
+install.packages("randomForest")
+install.packages("frequency")
+install.packages("bitops")
+```
+
+# Selection des documents utiles a l'étude
+
+```{r}
+doc=ehop$entrepot() %>% 
+  filter (AGE_PAT >= 18 & DATESIGNATURE >= TO_DATE("2022-01-20", "YYYY-MM-DD") & DATESIGNATURE <= TO_DATE("2022-01-21", "YYYY-MM-DD"))  %>%
+  collect()
+
+doc=doc%>%
+  distinct(TITRE,.keep_all = TRUE )%>%
+  select(ID_ENTREPOT,UF,UF_EXEC,TITRE,TYPE_DOC,TEXTE_AFFICHAGE)
+View(doc)
+
+#liste documents correspondant aux comptes rendus d'hospitalisation
+doc$hospit=str_detect(doc$TITRE ,"(hopit|CRH)")
+doc=doc%>%filter(hospit==TRUE)
+doc=doc%>%distinct(TYPE_DOC,.keep_all = TRUE)
+type_doc=doc$TYPE_DOC#liste des noms de documents correspodant aux comptes rendus d'hospitalisation (regarder la colonne "typedoc")
+rm(doc,type_doc)
+```
+
+#DEBUT SCRIPT
+
+# Définir dates de l etude
+
+```{r}
+deb="2019-06-01" #format yyyy-mm-dd
+fin="2022-06-01"
+
+```
+
+#Parametre de rmakdown (eviter messages)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE,
+	results = "hide"
+)
+```
+
+# Packages: activation
+
+```{r}
+library(tidyr)
+library(janitor)
+library(lubridate)
+library(dplyr)
+library(plyr)
+library(dbplyr)
+library(skimr) 
+library(infer) 
+library(extracthop)
+library(xml2)
+library(rvest)
+library(selectr)
+library(purrr)
+library(stringi)
+library(rlang)
+library(cli)
+library(fansi)
+library(vctrs)
+library(jsonlite)
+library(tidyselect)
+library(remotes)
+library(ellipsis)
+library(stringr)
+library(expss)
+library(htmlwidgets)
+library(frequency)
+library(plyr)
+library(gtsummary)
+library(broom)
+library(ggplot2)
+library(mice)
+library(missForest)
+library(forestmodel)
+library(pROC)
+library(randomForest)
+library(ROCR)
+library(neuralnet)
+```
+
+# Connexion a ehop
+
+```{r}
+library(eHOPcore)
+ehop <- eHOPdb("chu")
+```
+
+# COLLECTE DONNEES BRUTES
+
+## Collecter compte rendus des services
+
+```{r}
+## Collecter compte rendus des services 
+ depart=as_date("2019-01-01")
+ arrivee=as_date("2022-06-01")
+ hosp=tibble(NA)
+ 
+ depart=depart-1#sinono ca decale les dates 
+ arrivee=arrivee-1
+ nb_jour= as.duration(interval(depart,arrivee))
+ nb_jour=nb_jour/3600/24
+ nb_jour=as.numeric(nb_jour)
+ nb_jour=(nb_jour+1)#/10
+ date=depart#date du debut de la boucle
+ date=date(date)
+ date
+ for (x in 1:nb_jour) {
+   date=date+1
+   tryCatch({
+      a=date
+      b=date+1
+     #date10=date+10
+      hosp_x<-ehop$entrepot() %>%
+       filter(TYPE_DOC  %in% c("DXCARE:DXCARE:LLS","DXCARE:E1762","LN:34112-3") &
+           AGE_PAT >= 18 &
+              DATESIGNATURE >= TO_DATE(a, "YYYY-MM-DD") &
+              DATESIGNATURE <= TO_DATE(b, "YYYY-MM-DD")) %>% collect()
+      
+     hosp=bind_rows(hosp,hosp_x)
+   }, error=function(e){
+     print(paste("bug pour la date", date))
+     cat("ERROR :",conditionMessage(e), "\n")})
+ }
+
+ hosp=hosp[-1,-1]
+ hosp=remove_empty(hosp, which = c("rows", "cols"), quiet = TRUE)
+```
+
+## collecter CRH urgences
+
+```{r}
+depart=as_date("2019-01-01")
+arrivee=as_date("2022-06-01")
+crh=tibble(NA)
+
+depart=depart-1 
+arrivee=arrivee-1
+nb_jour= as.duration(interval(depart,arrivee))
+nb_jour=nb_jour/3600/24
+nb_jour=as.numeric(nb_jour)
+nb_jour=nb_jour+1
+date=depart#date du debut de la boucle
+
+for (x in 1:nb_jour) {
+  date=date+1
+   tryCatch({
+     crh_x<-ehop$entrepot() %>%
+     filter(TYPE_DOC   == "LN:15507-7"  &  AGE_PAT >= 18 &
+              DATESIGNATURE == TO_DATE(date,"YYYY-MM-DD")) %>%
+     collect()
+   crh=bind_rows(crh,crh_x)
+   }, error=function(e){
+     print(paste("bug pour la date", date))
+     cat("ERROR :",conditionMessage(e), "\n")})
+ }
+ 
+crh=crh[-1,-1]
+rm(crh_x)
+
+```
+
+## Collecter examens de biologie
+
+```{r message=FALSE, warning=FALSE}
+
+ 
+ ## Collecter compte rendus labo 
+ depart=as_date("2019-01-01")
+ arrivee=as_date("2022-06-01")
+ labo=tibble(NA)
+ 
+ depart=depart-1 
+ arrivee=arrivee-1
+ nb_jour= as.duration(interval(depart,arrivee))
+ nb_jour=nb_jour/3600/24
+ nb_jour=as.numeric(nb_jour)
+ nb_jour=(nb_jour+1)#/10
+ date=depart#date du debut de la boucle
+ date=date(date)
+ date
+ for (x in 1:nb_jour) {
+   date=date+1
+   tryCatch({
+      a=date
+      b=date+1
+     #date10=date+10
+      labo_x<-ehop$entrepot() %>%
+       filter(TYPE_DOC == "LN:11502-2" &
+                 AGE_PAT >= 18 &
+                 UF%in%c("4081","4082", "4082A","4082B","4083", "4086")&
+              DATESIGNATURE >= TO_DATE(a, "YYYY-MM-DD") &
+              DATESIGNATURE <= TO_DATE(b, "YYYY-MM-DD")) %>% collect()
+      
+     labo=bind_rows(labo,labo_x)
+   }, error=function(e){
+     print(paste("bug pour la date", date))
+     cat("ERROR :",conditionMessage(e), "\n")})
+ }
+ labo=labo[-1,-1]
+ 
+ # Conserver uniquement les biologies des patients passes aux urgences
+labo=labo%>%filter(ID_SEJ%in% crh$ID_SEJ)
+
+```
+
+## collecter imagerie
+
+```{r}
+## Collecter compte rendus imagerie 
+ depart=as_date("2019-01-01")
+ arrivee=as_date("2022-06-01")
+ image=tibble(NA)
+ 
+ depart=depart-1
+ arrivee=arrivee-1
+ nb_jour= as.duration(interval(depart,arrivee))
+ nb_jour=nb_jour/3600/24
+ nb_jour=as.numeric(nb_jour)
+ nb_jour=(nb_jour+1)#/10
+ date=depart#date du debut de la boucle
+ date=date(date)
+ date
+ for (x in 1:nb_jour) {
+   date=date+1
+   tryCatch({
+      a=date
+      b=date+1
+      image_x<-ehop$entrepot() %>%
+       filter(TYPE_DOC == "LN:18748-4" & AGE_PAT >= 18 &
+                 UF%in%c("4081","4082", "4082A","4082B","4083", "4086")&
+                 DATESIGNATURE >= TO_DATE(a, "YYYY-MM-DD") &
+                 DATESIGNATURE <= TO_DATE(b, "YYYY-MM-DD")) %>%
+         collect()
+      
+     image=bind_rows(image,image_x)
+   }, error=function(e){
+     print(paste("bug pour la date", date))
+     cat("ERROR :",conditionMessage(e), "\n")})
+ }
+ image=image[-1,-1]
+ # Conserver uniquement les imageries des patients passes aux urgences
+ image=image%>%filter(ID_SEJ%in% crh$ID_SEJ)
+```
+
+## Collecter PMSI
+
+```{r}
+## Collecter compte rendus pmsi 
+depart=as_date("2019-01-01")
+arrivee=as_date("2022-06-01")
+pmsi=tibble(NA)
+
+depart=depart-1
+arrivee=arrivee-1
+nb_jour= as.duration(interval(depart,arrivee))
+nb_jour=nb_jour/3600/24
+nb_jour=as.numeric(nb_jour)
+nb_jour=(nb_jour+1)#/10
+date=depart#date du debut de la boucle
+date=date(date)
+date
+for (x in 1:nb_jour) {
+  date=date+1
+  tryCatch({
+    a=date
+    b=date+1
+    pmsi_x<-ehop$entrepot() %>%
+      filter(TYPE_DOC == "RUM" &  AGE_PAT >= 18 &
+               DATESIGNATURE >= TO_DATE(a, "YYYY-MM-DD") &
+               DATESIGNATURE <= TO_DATE(b, "YYYY-MM-DD"))  %>% 
+      collect()
+    
+    pmsi=bind_rows(pmsi,pmsi_x)
+  }, error=function(e){
+    print(paste("bug pour la date", date))
+    cat("ERROR :",conditionMessage(e), "\n")})
+}
+pmsi=pmsi[-1,-1]
+# Conserver uniquement les pmsi des patients passes aux urgences
+pmsi=pmsi%>%filter(ID_SEJ%in% crh$ID_SEJ)
+rm(a,arrivee,b,date,date_bug,date_bug_ou_fin,date10,date100,depart,nb_jour,x,hosp_x,pmsi_x,image_x,crh_x,labo_x)
+```
+
+#Sauvegarder données brutes
+
+```{r}
+crh_brut=crh
+hosp_brut=hosp
+image_brut=image
+labo_brut=labo
+pmsi_brut=pmsi
+```
+
+#Retirer les lignes en double (doublons) et colonnes vides
+
+```{r}
+#doublons
+hosp_brut=hosp_brut[!duplicated(hosp_brut), ]
+labo_brut=labo_brut[!duplicated(labo_brut), ]
+crh_brut=crh_brut[!duplicated(crh_brut), ]
+image_brut=image_brut[!duplicated(image_brut), ]
+pmsi_brut=pmsi_brut[!duplicated(pmsi_brut), ]
+
+#colonnes vides
+hosp_brut=remove_empty(hosp_brut, which = c("rows", "cols"), quiet = TRUE)
+labo_brut=remove_empty(labo_brut, which = c("rows", "cols"), quiet = TRUE)
+crh_brut=remove_empty(crh_brut, which = c("rows", "cols"), quiet = TRUE)
+image_brut=remove_empty(image_brut, which = c("rows", "cols"), quiet = TRUE)
+pmsi_brut=remove_empty(pmsi_brut, which = c("rows", "cols"), quiet = TRUE)
+```
+
+#EXTRACTIONS DATES ET TEMPS ##Changement noms dataframes
+
+```{r}
+crh=crh_brut
+hosp=hosp_brut
+image=image_brut
+labo=labo_brut
+pmsi=pmsi_brut
+rm(crh_brut,hosp_brut,image_brut,labo_brut,pmsi_brut)
+```
+
+##filtrer les patients passés aux urgences ET hospitalisés
+
+```{r}
+#ID des  patients a garder dans l'etude
+id_urg_hosp=inner_join(crh,hosp,by="ID_SEJ")
+id_urg_hosp=select(id_urg_hosp,ID_SEJ)
+
+crh= crh%>%filter(ID_SEJ %in% id_urg_hosp$ID_SEJ)
+hosp= hosp%>%filter(ID_SEJ %in% id_urg_hosp$ID_SEJ)
+image= image%>%filter(ID_SEJ %in% id_urg_hosp$ID_SEJ)
+labo= labo%>%filter(ID_SEJ %in% id_urg_hosp$ID_SEJ)
+pmsi= pmsi%>%filter(ID_SEJ %in% id_urg_hosp$ID_SEJ)
+rm(id_urg_hosp)
+
+```
+
+##Dates des urgences
+
+```{r}
+
+#Extraire date entree urg
+
+#extraire ce qui est apres "Date d'arrivée : <b>"
+  df0=crh
+  df_dates_urg=select(df0,ID_SEJ)
+  df_dates_urg$date_entree_urg=NA
+  df_dates_urg$date_sortie_urg=NA
+  df_dates_urg$temps_urg=NA
+
+  for (x in 1:nrow(df0)) {
+
+  df0_x=df0[x,"TEXTE_AFFICHAGE"]
+
+  #Date et heure d'arrivee aux urgences pour debut dataframe
+  date=sub(".*Date d'arrivée : <b>" , "", df0_x)  #selectionnne ce qui est apres "Date d'arrivée : <b>"
+  date=substr(date,1,25)#les 5 caracteres apres l'expression Date d'arrivée : <b>
+  date_arr=sub("</b> à.*","",date)
+  heure_arr=sub(".*<b>","",date)
+
+  #Date et Heure de decision medicale de sortie des urgences.
+  date=sub(".*Décision médicale: <b>" , "", df0_x)
+  date=sub("</b>.*","",date)
+  date_sor=sub(" .*","",date)
+  heure_sor=sub(".* ","",date)
+
+  #formattage
+  a=paste(date_arr,heure_arr,sep = ",")
+  a=dmy_hm(a)
+
+  b=paste(date_sor,heure_sor,sep = ",")
+  b=dmy_hm(b)
+
+  #Temps de passage urgences:
+  c=a %--% b#fabrique la variable de durée au format  "time interval"
+  c=as.duration(c)
+  c=as.numeric(c)
+  c=c/3600
+  df_dates_urg[x,2]=a
+  df_dates_urg[x,3]=b
+  df_dates_urg[x,4]=c
+}
+  summary(df_dates_urg)
+
+  rm(a,b,c,date,date_arr,date_sor,heure_arr,heure_sor,df0_x,x, df0,df_temps_passage)
+  
+  # Retirer valeurs aberrantes du temps de passage
+  df0=df_dates_urg
+  x=12
+  for (x in 1:nrow(df0))  {
+    a=df0$temps_urg[x]<0.1
+    b=df0$temps_urg[x]>164
+    if(is.na(a)){
+      a=TRUE
+    }
+    if(is.na(b)){
+      b=TRUE
+    }
+    
+    if(a==TRUE) {
+      df0$temps_urg[x]=NA
+    }
+    if(b==TRUE) {
+      df0$temps_urg[x]=NA
+    }
+  }
+  df_dates_urg=df0
+  rm(df0,a,b,x)
+```
+
+##Dates labo
+
+```{r}
+df0=labo
+df_dates_labo=select(df0,ID_SEJ)
+df_dates_labo$date_prelev_labo=NA
+  for (x in 1:nrow(df0)) {
+  df0_x=df0[x,"TEXTE_AFFICHAGE"]
+  date=sub(".*Date prélèvement :</td><td>" , "", df0_x) 
+  date=substr(date,1,19)
+  date_prelev_labo=substr(date,1,10)
+  heure_prelev_labo=substr(date,12,16)
+                                      
+  a=paste(date_prelev_labo,heure_prelev_labo,sep = ",")
+  a=dmy_hm(a)
+  df_dates_labo[x,2]=a
+  }
+summary(df_dates_labo)
+  
+rm(df0,df0_x,date,date_prelev_labo,heure_prelev_labo,a )
+  
+rm(df0,df0_x,a,b,date,date_arr,date_prelev_labo,heure_prelev_labo,x)
+```
+
+##Filtrer exam labo faits dans les 24h apres admission aux urgences
+Seuls ces examens sont consideres faits en urgence et constituent des
+variables explicatives issues des urgences pour prédire un outcome en
+service
+
+```{r}
+
+#Df avec ID sej et date urgences+24H
+df0=df_dates_urg#%>%slice(1:1000)
+df0=df0%>%select_("ID_SEJ","date_entree_urg")
+df0$urg_24=NA
+
+x=1
+for (x in 1:nrow(df0)) {
+d=df0$date_entree_urg[x]
+#d=ymd_hms(d)
+d=d+days(1)# on considere que les exam sont fait en urgence si faits dans les  24h apres l'admission
+e=format(d, "%D")
+df0$urg_24[x]=e
+}
+
+#DF avec ID sej, date labo et date urg+24h
+df_01=df_dates_labo%>%select_("date_prelev_labo")
+df1=bind_cols(df_01,labo)
+
+df1=df1#%>%slice(1:1000)
+df2=left_join(df0,df1,by="ID_SEJ")
+df2$date_labo=NA
+x=2
+for (x in 1:nrow(df2)){
+  a=df2$date_prelev_labo[x]
+  b=format(a,"%D")
+  
+  df2$date_labo[x]=b
+}
+
+# Tester si date prelevement est dans les 24h qui suivent l' admission
+df2$prelevement_24h=NA
+x=2
+for (x in 1:nrow(df2)) {
+  
+  tryCatch(
+    {if (df2$date_labo[x] <= df2$urg_24[x]) {df2$prelevement_24h[x]=TRUE} else {df2$prelevement_24h[x]=FALSE}
+      
+    }, 
+    error=function(e) {
+      #message("manque une date")
+      #print(e)
+      }
+    )
+}
+
+#Conserver uniquement les prelevements faits dans les 24h apres admission
+df3=df2%>%filter(df2$prelevement_24h==TRUE)
+noms1=names(labo)
+df4=df3%>%select(noms1)
+labo=df4
+rm(df0,x,d,e,df_01,df1,df2,a,b,df3,df4,noms1,df_dates_labo)
+
+
+```
+
+##Filtrer imageries faites dans les 24h apres admission urgences
+
+```{r}
+df0=image
+
+# Fonction extraction date 
+extract_date_after_realise <- function(text) {
+  pattern <- "réalisé le ([0-9]{2}/[0-9]{2}/[0-9]{4})"
+  matches <- str_match(text, pattern)
+  if (is.na(matches[1, 2])) {
+    return(NA)#(NA si pas de date)
+  } else {
+    return(matches[1, 2])
+  }
+}
+
+# Appliquer la fonction 
+extracted_dates <- sapply(df0$TEXTE_AFFICHAGE, extract_date_after_realise)
+
+# Convertir les dates extraites en objets de classe "Date"
+df0$Realisation_Date <- as.Date(extracted_dates, format = "%d/%m/%Y")
+df_dates_imagerie=df0
+rm(extract_date_after_realise,extracted_dates,df0)
+
+```
+
+##Retirer imageries \>24h
+
+```{r}
+#Df avec ID sej et date urgences+24H
+df0 <- df_dates_urg %>%
+  select(ID_SEJ, date_entree_urg) %>%
+  mutate(urg_24 = date_entree_urg + days(1),
+         urg_24 = format(urg_24, "%D"))
+
+
+
+# Créer df1 avec les colonnes Realisation_date et labo
+df1 <- df_dates_imagerie %>%
+  select(Realisation_Date) %>%
+  bind_cols(image)
+
+# Joindre df0 et df1 en utilisant la clé ID_SEJ
+df2 <- df0 %>%
+  left_join(df1, by = "ID_SEJ") %>%
+  mutate(date_imagerie = format(Realisation_Date, "%D"))
+
+
+#tester si date imagerie est dans les 24h qui suivent l'admission
+df2 <- df2 %>%
+  mutate(imagerie_24h = if_else(as.Date(date_imagerie, format = "%m/%d/%y") <= as.Date(urg_24, format = "%m/%d/%y"), TRUE, FALSE))
+
+
+#COnserver uniquement les prelevements faits dans les 24h apres admission aux urgences
+df3=df2%>%filter(df2$imagerie_24h==TRUE)
+
+noms1=names(image)
+df4=df3%>%select(noms1)
+image=df4
+rm(df0,x,d,e,df_01,df1,df2,a,b,df3,df4,noms1,df_dates_imagerie)
+
+```
+
+##Formater les dates des urgences Calculer jour de la semaine , mois,
+période de la journée, temps de passage aux urgences
+
+```{r}
+df0=df_dates_urg#%>%slice(1:100)
+
+#Variables jour et mois (categorielles)
+df0 <- df0 %>%
+  mutate(jour = format(as.POSIXct(date_entree_urg, format = "%Y-%m-%d %H:%M:%S"), "%A"),
+         mois = format(as.POSIXct(date_entree_urg, format = "%Y-%m-%d %H:%M:%S"), "%B"))
+
+#Faire une colonne par jour de la semaine
+
+df0 <- df0 %>%
+  mutate(row_id = row_number())
+
+df0 <- df0 %>%
+  mutate(jour = as.factor(jour)) %>%
+  pivot_wider(names_from = jour, values_from = jour,
+              values_fn = list(jour = length),
+              names_prefix = "jour_",
+              values_fill = 0) %>%
+  select(-row_id)%>%
+  mutate(across(starts_with("jour_"), as.logical))
+
+#Idem pour les mois de l'année
+
+df0 <- df0 %>%
+  mutate(row_id = row_number())
+
+df0 <- df0 %>%
+  mutate(mois = as.factor(mois)) %>%
+  pivot_wider(names_from = mois, values_from = mois,
+              values_fn = list(mois = length),
+              names_prefix = "mois_",
+              values_fill = 0) %>%
+  select(-row_id)%>%
+  mutate(across(starts_with("mois_"), as.logical))
+
+# Extraire période de la journée
+df0 <- df0 %>%
+  mutate(heure = as.numeric(format(as.POSIXct(date_entree_urg, format = "%Y-%m-%d %H:%M:%S"), "%H")),
+         arrivee_matin6h12h = ifelse(heure >= 6 & heure < 12, TRUE, FALSE),
+         arrivee_après_midi12h18h = ifelse(heure >= 12 & heure < 18, TRUE, FALSE),
+         arrivee_soir18h24h = ifelse(heure >= 18 & heure < 24, TRUE, FALSE),
+         arrivee_nuit24h6h = ifelse(heure >= 0 & heure < 6, TRUE, FALSE))
+
+# Calculer temps de passage aux urgences
+df0$temps_urg <- as.numeric(difftime(df0$date_sortie_urg, df0$date_entree_urg, units = "hours"))
+
+#remplacer dataframe original
+df_dates_urg=df0
+rm(df0,d,e,jour_semaine,mois_annee,mois_année,x)
+
+#Jointure dates urgences avec crh
+df1=left_join(crh,df_dates_urg,by="ID_SEJ" )
+crh=df1
+rm(df1)
+
+#Remettre les noms des dataframes avant extraction des dates
+crh_brut=crh
+image_brut=image
+hosp_brut=hosp
+labo_brut=labo
+pmsi_brut=pmsi
+rm(crh,labo,image,pmsi,hosp,df_dates_urg)
+
+#sauvegarder dataframes avec les dates
+crh_dates=crh_brut%>%select(-c(ID_ENTREPOT,ID_PAT,ID_LOT,TITRE,TYPE_DOC,DATESIGNATURE,TEXTE_AFFICHAGE,AGE_PAT,jour_NA,mois_NA))
+```
+
+#FILTRER PATIENTS HOSPITALISES APRES PASSAGE AUX URGENCES
+
+```{r}
+id_urg_hosp=inner_join(crh_brut,hosp_brut,by="ID_SEJ")
+id_urg_hosp=select(id_urg_hosp,ID_SEJ)
+```
+
+#Filtrer documents d'interet
+
+```{r}
+
+#FIltrer CRH corrompus
+  crh=crh%>%filter(!grepl(".ADRESSE_PATIENT.<head>.ADRESSE_PATIENT.",TEXTE_AFFICHAGE)) #filter les crh verolés
+  crh=filter(crh,!duplicated(crh$ID_SEJ))#filter les observations dupliquées 
+
+#Filtrer patient hospitalisesa pares passage aux urg et idem pour les autre df
+  hosp=hosp_brut%>%filter(hosp_brut$ID_SEJ%in% crh$ID_SEJ)
+  image=image_brut%>%filter(image_brut$ID_SEJ%in% crh$ID_SEJ)
+  labo=labo_brut%>%filter(labo_brut$ID_SEJ%in% crh$ID_SEJ)
+  pmsi=pmsi_brut%>%filter(pmsi_brut$ID_SEJ%in% crh$ID_SEJ)
+  
+```
+
+# Packages: activation
+
+```{r}
+  library(tidyr)
+  library(janitor)
+  library(lubridate)
+  library(dplyr)
+  library(plyr)
+  library(dbplyr)
+  library(skimr) 
+  library(infer) 
+  library(extracthop)
+  library(xml2)
+  library(rvest)
+  library(selectr)
+  library(purrr)
+  library(stringi)
+  library(rlang)
+  library(cli)
+  library(fansi)
+  library(vctrs)
+  library(jsonlite)
+  library(tidyselect)
+  library(remotes)
+  library(ellipsis)
+  library(stringr)
+  library(expss)
+  library(htmlwidgets)
+  library(frequency)
+  library(plyr)
+  library(gtsummary)
+  library(broom)
+  library(ggplot2)
+  library(mice)
+  library(missForest)
+  library(forestmodel)
+  library(pROC)
+  library(randomForest)
+  library(ROCR)
+  library(neuralnet)
+```
+
+#STRUCTURATION DES DONNEES
+
+##Pré-traitement des donnees textuelles
+
+###Séparer les blocs de textes des urgences (IAO, anamnese, ATCD ...)
+
+####Creer dataframe avec textes decoupés
+
+```{r}
+df_crh_text=crh%>%select("ID_SEJ","TEXTE_AFFICHAGE")
+  
+  ####Decoupage 
+
+  urg_tidy=lapply(df_crh_text$TEXTE_AFFICHAGE,get_tidy_resurgences)
+  
+    ####infirmier d'accueil
+  fonction=function(x)  {
+    iao=x%>%filter(titre=="IAO")%>%select(texte_html)
+    return(iao)
+  }
+  texte_IAO=map(urg_tidy ,~fonction(.))
+  texte_IAO=map(texte_IAO,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_IAO)#creation du dataframe
+  rm(fonction,texte_IAO)
+  ####ANAMNÈSE
+  fonction=function(x)  {
+    anamnese=x%>%filter(titre=="ANAMNÈSE")%>%select(texte_html)
+    return(anamnese)
+  }
+  texte_anamnese=map(urg_tidy ,~fonction(.))
+  texte_anamnese=map(texte_anamnese,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_anamnese)#creation du dataframe
+  rm(fonction,texte_anamnese)
+  ####ANTÉCÉDENTS
+  fonction=function(x)  {
+    antecedents=x%>%filter(titre=="ANTÉCÉDENT")%>%select(texte_html)
+    return(antecedents)
+  }
+  texte_antecedents=map(urg_tidy ,~fonction(.))
+  texte_antecedents=map(texte_antecedents,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_antecedents)#creation du dataframe
+  rm(fonction,texte_antecedents)
+  ####OBSERVATION MEDICALE
+  fonction=function(x)  {
+    observation=x%>%filter(titre=="OBSERVATION STANDARD ADULTE")%>%select(texte_html)
+    return(observation)
+  }
+  texte_observation=map(urg_tidy ,~fonction(.))
+  texte_observation=map(texte_observation,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_observation)#creation du dataframe
+  rm(fonction,texte_observation)
+  ####EVOLUTION
+  fonction=function(x)  {
+    evolution=x%>%filter(titre=="EVOLUTION")%>%select(texte_html)
+    return(evolution)
+  }
+  texte_evolution=map(urg_tidy ,~fonction(.))
+  texte_evolution=map(texte_evolution,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_evolution)#creation du dataframe
+  rm(fonction,texte_evolution)
+  ####DIAGNOSTICS
+  fonction=function(x)  {
+    diagnostic=x%>%filter(titre=="DIAGNOSTICS")%>%select(texte_html)
+    return(diagnostic)
+  }
+  texte_diagnostic=map(urg_tidy ,~fonction(.))
+  texte_diagnostic=map(texte_diagnostic,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_diagnostic)#creation du dataframe
+  rm(fonction,texte_diagnostic)
+  ####ORIENTATION À LA SORTIE
+  fonction=function(x)  {
+    orientation=x%>%filter(titre=="ORIENTATION À LA SORTIE")%>%select(texte_html)
+    return(orientation)
+  }
+  texte_orientation=map(urg_tidy ,~fonction(.))
+  texte_orientation=map(texte_orientation,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_orientation)#creation du dataframe
+  rm(fonction,texte_orientation)
+  ####CONCLUSION SENIOR
+  fonction=function(x)  {
+    conclusion=x%>%filter(titre=="CONCLUSION SENIOR")%>%select(texte_html)
+    return(conclusion)
+  }
+  texte_conclusion=map(urg_tidy ,~fonction(.))
+  texte_conclusion=map(texte_conclusion,~as.character(.))#conversion en texte des listes
+  df_crh_text=tibble(df_crh_text,texte_conclusion)#creation du dataframe
+  rm(fonction,texte_conclusion)
+  
+  ####Assembler les dataframes des textes
+  df_crh_text=select(df_crh_text,-"TEXTE_AFFICHAGE")
+  crh=left_join(crh,df_crh_text, by="ID_SEJ")
+  
+  rm(df_crh_text,crh1, texte_IAO,texte_anamnese,texte_antecedents,texte_observation,texte_evolution,texte_diagnostic,texte_orientation,texte_conclusion)
+```
+
+```{r}
+### Normalisation
+  
+  # creation d une fonction de normalisation 
+  urg_text_norm <- function(a) {
+    a<-str_to_lower(a)
+    a<-str_replace_all(a, '[[:punct:] ]+'," ")
+    a=iconv(a,to="ASCII//TRANSLIT")#enleve les accents
+    return(a)
+  }
+  
+  #normalisation des blocs de texte
+  crh$texte_urg<-urg_text_norm(crh$TEXTE_AFFICHAGE)
+  crh$texte_IAO<-urg_text_norm(crh$texte_IAO)
+  crh$texte_anamnese<-urg_text_norm(crh$texte_anamnese)
+  crh$texte_antecedents<-urg_text_norm(crh$texte_antecedents)
+  crh$texte_observation<-urg_text_norm(crh$texte_observation)
+  crh$texte_diagnostic<-urg_text_norm(crh$texte_diagnostic)
+  crh$texte_evolution<-urg_text_norm(crh$texte_evolution)
+  crh$texte_orientation<-urg_text_norm(crh$texte_orientation)
+  crh$texte_conclusion<-urg_text_norm(crh$texte_conclusion)
+  hosp$texte_hosp<-urg_text_norm(hosp$TEXTE_AFFICHAGE)
+  image$texte_image<-urg_text_norm(image$TEXTE_AFFICHAGE)
+  labo$texte_labo<-urg_text_norm(labo$TEXTE_AFFICHAGE)
+  pmsi$texte_pmsi=urg_text_norm(pmsi$TEXTE_AFFICHAGE)
+  
+  ### Retrait des balises html
+  
+  #Fonction 
+  urg_text_html <- function(a) {
+    return(gsub("<.*?>", "", a))
+  }
+  
+  #retrait des balises 
+  crh$texte_urg <-urg_text_html(crh$texte_urg)
+  crh$texte_IAO<-urg_text_html(crh$texte_IAO)
+  crh$texte_anamnese<-urg_text_html(crh$texte_anamnese)
+  crh$texte_antecedents<-urg_text_html(crh$texte_antecedents)
+  crh$texte_observation<-urg_text_html(crh$texte_observation)
+  crh$texte_evolution<-urg_text_html(crh$texte_evolution)
+  crh$texte_orientation<-urg_text_html(crh$texte_orientation)
+  crh$texte_diagnostic<-urg_text_html(crh$texte_diagnostic)
+  crh$texte_conclusion<-urg_text_html(crh$texte_conclusion)
+  hosp$texte_hosp<-urg_text_html(hosp$texte_hosp)
+  image$texte_image<-urg_text_html(image$texte_image)
+  pmsi$texte_pmsi<-urg_text_html(pmsi$texte_pmsi)
+
+  
+```
+
+## Encodage variables binaires
+
+### Creation des dataframes binaires
+
+```{r}
+  hosp_bin=hosp%>%select(ID_SEJ)
+  crh_bin=crh%>%select(ID_SEJ)
+  labo_bin=labo%>%select(ID_SEJ)
+  image_bin=image%>%select(ID_SEJ)
+  pmsi_bin=pmsi%>%select(ID_SEJ)
+```
+
+### Variables binaires urgences
+
+#### Antécédents
+
+```{r}
+  
+  df1=select(crh,"ID_SEJ","texte_antecedents")
+  
+  atcd_tous=tibble(NA)
+  x=2
+  for (x in 1:nrow(df1)) {
+    atcd=tibble(NA)
+    atcd$ID_SEJ=as.numeric(df1[x,1])
+    atcd$text=as.character(df1[x,2])
+    atcd$epilep=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (epilep|épilep|comiti)")
+    atcd$avc=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(avc|accident vasculaire cere|aphasi|hemipleg)")
+    atcd$demence=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(demence|mms|cognit|altz|lewy|desor)")
+    atcd$coma=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(coma)")
+    atcd$HTA=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(hta|hyperten|hyper-ten)")
+    atcd$infarct=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(sca non st|sca st|infarct|stent|idm)")
+    atcd$trouble_rythme=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(acfa|fibril|auricu|flutter|pace|maker|defibril|fv|tv)")
+    atcd$ins_card=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(oap|oedeme)")
+    atcd$TVPEP=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(tvp|embolie|phlebite)")
+    atcd$asthme=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(asthm)")
+    atcd$BPCO=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(bpco|emphys|bpco)")
+    atcd$pneumopathie=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(pneumonie|pneumopathie|sdra)")
+    atcd$oxygene=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(vni|oxygen)")
+    atcd$apnee_sommeil=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(sas apar|vni|sas non app|apnee)")
+    atcd$tabac=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|non)(tabac oui|fumeu|cigarett)")
+    atcd$surpoids=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(obesit|obese|surpoi)")
+    atcd$diabete=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(did|dnid|diab)")
+    atcd$addiction=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(toxico|cannabi|canabi|shit|cocaine|shit|mdma|sevrage|heroine|addict|alcooli|alcoli|oh chro|exogenos|biere|whisk|vin|vodk|tequil)")
+    atcd$depre=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(depres|imv|suici|intoxicatio|intox med)")
+    atcd$psychose=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(psychose|maniaq|schyso|paranoi|schiso|pmd|bipol)")
+    atcd$surdosage=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(surdosa)")
+    atcd$solitude=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(seul|isol|divor|sans enfa|pas d enfa|sans fami|pas de fam|sdf|logement)")
+    atcd$carceral=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(carcera|peniten|police|garde a vue|brigade|gendarmeri|de l ordre)")
+    
+    atcd$incurie=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(incur|hygie)")
+    atcd$dependance=str_detect(atcd$text, "(dependan|lit medic|aides a domi|ehpad|institu|ide a dom|escar)")
+    atcd$trouble_marche=str_detect(atcd$text, "(deambul|canne|marche avec|chute)")
+    atcd$cirrose=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(cirrhose|cirose|cirrose|steatose|chc|carcinome hepato)")
+    atcd$hepatite=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(hepati|chc|cirrose|steatose)")
+    atcd$occlusion=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(occlusi)")
+    atcd$pancreatite=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(pancreat)")
+    atcd$ulcere=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(gastrit|ulcere|hiatale|ugd)")
+    
+    atcd$cancer=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(cancer|neo|adk|tumeu|carci|tnm|meta|myelom|dyspla|melanom|chimio|radiothera|leuce|lympho|remission)")
+    
+    atcd$sepsis=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(sepsis|choc sept|meningite)")
+    atcd$pyelonephrite=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(pna|pyelo)")
+    atcd$ins_renale=str_detect(atcd$text, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni)(clairance|insuffisance renale)")
+    atcd_tous=rbind.fill(atcd_tous,atcd)
+  }
+  
+  crh_atcd=atcd_tous[-1,-1]
+  crh_atcd=crh_atcd[,-2]
+  rm(atcd_tous,df1,x)
+  df0=crh_atcd
+  df0=df0%>%dplyr::mutate_at(c(2:ncol(df0)), replace_na, FALSE)%>%
+    dplyr::mutate_at(c(2:ncol(df0)), as.logical)
+  crh_atcd=df0
+  rm(df0,atcd)
+```
+
+#### Motif de passage
+
+```{r}
+  
+  crh_motif=crh%>%select(ID_SEJ)
+  crh_motif$texte=paste(crh$texte_IAO,crh$texte_anamnese)#choix des textes analysés
+  
+  crh_motif$malaise<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (malaise|perte de con)")
+  crh_motif$intoxication<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (intox|imv|surdos)")
+  crh_motif$suicide<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (suici|tds|pend)")
+  crh_motif$confusion<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (confus|desori)")
+  crh_motif$cephalee<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (migrai|cephal)")
+  crh_motif$trauma_cranien<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (TC|trauma cranien)")
+  crh_motif$plaie<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (plaie|dermab|excoria)")
+  crh_motif$dyspnee<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (dyspn|polypn|hypox|desat|hypoxem|orthop|tachypn|tirage|signe de lutte|signe d insuffisance respi|signe de lutte|cyanos|crise d asth)")
+  crh_motif$toux<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (toux)")
+  crh_motif$fievre<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (fievre|frisson|hyperthermi)")
+  crh_motif$marbrures<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (marbr)")
+  crh_motif$athenie<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (aeg|asthenie|fatigue|madd|maintien a domi)")
+  crh_motif$douleur_thoracique<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (douleur thoracique|thoraciqu|angor)")
+  crh_motif$douleur_abdominale<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (douleur abdo)")
+  crh_motif$somnolence<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (somnol)")
+  crh_motif$oedemes<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (oedemes)")
+  crh_motif$anxiete<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (anxi)")
+  crh_motif$agitation<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (agit)")
+  crh_motif$chute<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (chute)")
+  crh_motif$fievre<-str_detect(crh_motif$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (fievre|frisson|hyperther)")
+  
+  crh_motif=select(crh_motif,-2)
+  
+```
+
+####Hospitalisation apres urgences
+
+```{r}
+  df_hospit=crh%>%select(ID_SEJ)
+  df_hospit$hospit=NA
+  
+  for (x in 1:nrow(df_hospit)) {
+    crh_x=crh$texte_orientation[x]
+    if (is.na(crh_x)==FALSE){
+      if ((str_detect(crh_x,"destination hospitalise")==TRUE)) {
+        df_hospit$hospit[x]=(TRUE)
+      } else{df_hospit$hospit[x]=(FALSE)}
+    }
+  }
+  summary(df_hospit)
+```
+
+#### Symptômes
+
+```{r}
+  crh_symptomes=crh%>%select(ID_SEJ)
+  crh_symptomes$texte=paste(crh$texte_IAO,crh$texte_observation,crh$texte_evolution,crh$texte_orientation,crh$texte_diagnostic,crh$texte_conclusion)
+
+  crh_symptomes$confusion<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (confus|desori)")
+  
+  crh_symptomes$cephalee<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (migrai|cephal)")
+  
+  crh_symptomes$trauma_cranien<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (TC|trauma cranien)")
+  
+  crh_symptomes$plaie<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (plaie|dermab|excoria)")
+  
+  crh_symptomes$toux<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (toux)")
+  
+  crh_symptomes$fievre<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (fievre|frisson|hyperthermi)")
+  
+  crh_symptomes$marbrures<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (marbr)")
+  
+  crh_symptomes$athenie<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (aeg|asthenie|fatigue|madd|maintien a domi)")
+  
+  crh_symptomes$douleur_thoracique<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (douleur thoracique|thoraciqu|angor)")
+  
+  crh_symptomes$douleur_abdominale<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (douleur abdo)")
+  
+  crh_symptomes$somnolence<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (somnol)")
+  
+  crh_symptomes$oedemes<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (oedemes)")
+  
+  crh_symptomes$anxiete<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni) (anxi)")
+  
+  crh_symptomes$agitation<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (agit)")
+  
+  crh_symptomes$opposant<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (opposant)")
+  
+  crh_symptomes$chute<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (chute)")
+  
+  crh_symptomes$fievre<-str_detect(crh_symptomes$texte, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de|ni|pas d ) (fievre|frisson|hyperther)")
+  
+```
+
+#### Autres variables
+
+```{r}
+  #Passage en dechoquage
+  crh_bin$dechoc=str_detect(crh$texte_urg,"(decho|sauv)")
+  summary(crh_bin$dechoc)#
+
+  #dyspnee aux urgences
+  crh_bin$dyspnee_urg=str_detect(crh$texte_urg, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de) (dyspn|difficulte a respi|difficulte respi|hypox|desatur|insuffisance respi|tirage|lutte respi|signe de lutte|orthopne|tachypne)")
+  
+  #intubation aux urgences
+  crh_bin$intubation_urg=str_detect(crh$texte_urg, "(?<!pas de|pas|pas d|pas ete|sans|pas avoir d|pas etre|pas eu d|pas eu de) (intub|IOT|ISR|ventilation meca)")
+  summary(crh_bin$intubation_urg)
+
+```
+
+### Variables binaires examens complémentaires aux urgences
+
+```{r}
+  #Creation dataframe imagerie aux urgences
+  crh_exam=select(crh,"ID_SEJ")
+  
+  #SCANNER CEREBRAL AUX URGENCES (donc str detect dans crh)
+  crh_exam$scan_cerebal=str_detect(crh$TEXTE_AFFICHAGE,"SANNER CEREBRAL|SCANNER ENCEPHALIQUE|TDM CERE", negate=FALSE)
+  
+  #EEG AUX URGENCES 
+  crh_exam$EEG=str_detect(crh$TEXTE_AFFICHAGE," EEG ", negate=FALSE)
+  
+  #SCAN THORACIQUE AUX URGENCES 
+  crh_exam$scan_thorax=str_detect(crh$TEXTE_AFFICHAGE,"SCANNER THOR|TDM THOR", negate=FALSE)
+  
+  #SCAN ABDOMINAL AUX URGENCES 
+  crh_exam$scan_abdo=str_detect(crh$TEXTE_AFFICHAGE,"SCANNER ABDO|TDM ABDO", negate=FALSE)
+  
+  #ECG AUX URGENCES 
+  crh_exam$ECG=str_detect(crh$TEXTE_AFFICHAGE,"ECG", negate=FALSE)
+  
+  #Radio thorax 
+  crh_exam$RX_THORAX=str_detect(crh$TEXTE_AFFICHAGE,"THORAX FACE", negate=FALSE)
+  
+  #Radio bassin 
+  crh_exam$RX_bassin=str_detect(crh$TEXTE_AFFICHAGE,"PELVIS", negate=FALSE)
+  
+  summary(crh_exam)
+```
+
+### Variables binaires biologie
+
+```{r}
+
+  #Viro sarscov2 realisée
+  labo_bin$viro_sars_faite=str_detect(labo$texte_labo,"sars cov", negate=FALSE)
+  summary(labo_bin$viro_sars_faite)
+  
+  #Viro sarscov2 positive
+  labo_bin$viro_sars_positive=str_detect(labo$texte_labo,"sars cov 2 rtpcr< td><td>positif<|covid< td><td>presence", negate=FALSE)# 
+  summary(labo_bin$viro_sars_positive)
+  
+```
+
+### Variables binaires compte rendu hospitalisation
+
+```{r}
+  
+  #dyspnee en service
+  hosp_bin$dyspnee_hosp=str_detect(hosp$texte_hosp, "(?<!pas de|pas|pas ete|sans|sans signe de|aucune|pas de notion de|sans notion de|aucune notion de|pas constate de|pas avoir de|pas eu de|pas presente de) (dyspn|difficulte a respi|difficulte respi|hypox|desatur|insuffisance respi|tirage|lutte respi|signe de lutte|orthopne|tachypne)")
+  
+  #intubation en service
+  hosp_bin$intubation_hosp=str_detect(hosp$texte_hosp, "(?<!pas de|pas|pas d|pas ete|sans|pas avoir d|pas etre|pas eu d|pas eu de) (intub|IOT|ISR|ventilation meca)")
+  
+  #LImitation thérapeutique en service
+  hosp_bin$lata_hosp=str_detect(hosp$texte_hosp, "limitation ther|limitation des soins|LATA|acharnement|soins de confort")
+  
+  summary(hosp_bin)
+```
+
+### Variables binaires du PMSI
+
+```{r}
+  
+  #deces
+  pmsi_bin$deces_pmsi=str_detect(pmsi$texte_pmsi , "9 deces")
+  
+  #remplissage vasculaire
+  pmsi_bin$remplissage_vasc_pmsi=str_detect(pmsi$texte_pmsi , "remplissage")
+  
+  #embolisation
+  pmsi_bin$embolisation_pmsi=str_detect(pmsi$texte_pmsi , "embolisation")
+  
+  #transfusion
+  pmsi_bin$transfusion_pmsi=str_detect(pmsi$texte_pmsi , "transfusion")
+  
+  #arret cardiaque
+  pmsi_bin$ACR_pmsi=str_detect(pmsi$texte_pmsi , "ressuscitation")
+  
+  #EP
+  pmsi_bin$embolie_pul_pmsi=str_detect(pmsi$texte_pmsi , "embolie pulm")
+  
+  #adrenaline
+  pmsi_bin$adrenaline_pmsi=str_detect(pmsi$texte_pmsi , "adrenaline")
+  
+  #coma
+  pmsi_bin$coma_pmsi=str_detect(pmsi$texte_pmsi , "coma")
+  
+  #infarctus
+  pmsi_bin$infarctus_pmsi=str_detect(pmsi$texte_pmsi , "infarctus")
+  
+  #radiologie interventionelle
+  pmsi_bin$radio_interv_pmsi=str_detect(pmsi$texte_pmsi , "radiologie interven")
+  
+  #Coronarographie
+  pmsi_bin$coronarographie_pmsi=str_detect(pmsi$texte_pmsi , "arteriographie coronaire")
+  
+  summary(pmsi_bin)
+```
+
+### Traitements
+
+####Administrés aux urgences
+
+```{r}
+  
+  ttt_urg=tibble(NA)
+  df0=select(crh,ID_SEJ,TEXTE_AFFICHAGE)
+  # df0=slice(df0,1:50) # tester sur  echantillon 
+  
+  x=1#coller ici le no x a debugger dans environnement si la boucle plante
+  x=35#plante faire un trycatch
+  for (x in 1:nrow(df0)) {
+    tryCatch({
+      id=as.numeric(df0[x,1])
+      df0_x=as.character(df0[x,2])
+      ttt_x=get_tidy_resurgences(df0_x)
+      ttt_x$titre=as.character(ttt_x$titre)
+      ttt_x=ttt_x%>%filter (titre=="PRESCRIPTION DES TRAITEMENTS")
+      ttt_x=unlist(ttt_x[1,3])
+      ttt_x <- ttt_x %>% read_html(options="HUGE")%>% html_nodes("table")%>%html_table(fill=TRUE)
+      ttt_x=ttt_x[[1]]$Prescription
+      ttt_x=tibble(ttt_x)
+      ttt_x=ttt_x[!duplicated(ttt_x),]
+      ttt_x=tibble(ttt_x)
+      ttt_x$ID_SEJ=id
+      ttt_x$ttt_urg_posologie=TRUE
+      for (y in 1:nrow(ttt_x)) {
+        ttt_x[y,1]=word(ttt_x[y,1],1)
+      }
+      names(ttt_x)[names(ttt_x) == "ttt_x"] <- "Prescription"
+      ttt_x=ttt_x[duplicated(ttt_x)==FALSE,]
+      
+      ttt_x=ttt_x[(is.na(ttt_x$Prescription)==FALSE),]
+      ttt_x=ttt_x[(is.list(ttt_x$Prescription)==FALSE),]
+      ttt_x=ttt_x[!(ttt_x$Prescription==""),]
+      ttt_x=pivot_wider (ttt_x, names_from = Prescription, values_from= ttt_urg_posologie )
+      ttt_urg=rbind.fill(ttt_urg,ttt_x)
+    }, error=function(e){
+      a=1
+    })
+  }
+  
+  df_ttt_urg=ttt_urg[-1,-1]
+  rm(ttt_urg)
+  #ajout suffixe
+  colnames(df_ttt_urg) <- paste(colnames(df_ttt_urg),"ttt_urg", sep = "_")
+  names(df_ttt_urg)[1] ="ID_SEJ"
+  df0=df_ttt_urg
+  df0=filter(distinct(df0))
+  a=df0%>% filter(duplicated(df0$ID_SEJ)==TRUE)
+  df_ttt_urg=df0
+  df0=df_ttt_urg
+  df0=df0%>%dplyr::mutate_at(c(2:ncol(df0)), replace_na, FALSE)%>%
+    dplyr::mutate_at(c(2:ncol(df0)), as.logical)
+  df_ttt_urg=df0
+  rm(df0,a,ttt_x,crh_x,df0_x,id,x,y)
+```
+
+#### Traitements habituels
+
+```{r}
+df0=crh
+  df1=df0%>%select("ID_SEJ","TEXTE_AFFICHAGE")
+  df2=filter(df1,str_detect(df1$TEXTE_AFFICHAGE,"Ordonnance patient</font></td>")==TRUE)
+  df0=df2
+  rm(df1,df2)
+  ttt_hab=tibble(NA)
+  
+  for (x in 1:nrow(df0)) {
+    tryCatch({
+      id=as.numeric(df0[x,1])
+      df0_x=as.character(df0[x,2])
+      atcd_tables <- df0_x %>% xml2::read_html(options="HUGE") %>%rvest::html_nodes("font table")
+      ttt_x <- atcd_tables %>% magrittr::extract2(2) %>% 
+        rvest::html_table(trim = TRUE, fill = TRUE)
+      ttt_x=ttt_x[,1:2]
+      ttt_x[,2]=TRUE
+      for (y in 1:nrow(ttt_x)) {ttt_x[y,1]=word(ttt_x[y,1],1)}
+      ttt_x$ID_SEJ=id
+      ttt_x=ttt_x[duplicated(ttt_x)==FALSE,]
+      ttt_x=ttt_x%>%filter(!Prescription=="")
+      ttt_x=pivot_wider (ttt_x, names_from = Prescription, values_from= Posologie )
+      ttt_hab=rbind.fill(ttt_hab,ttt_x) 
+      
+    }, error=function(e){
+      a=1
+    })
+  }
+```
+
+```{r}
+  df_ttt_hab=ttt_hab[-1,-1]
+  rm(ttt_hab,ttt_x)
+  #ajout suffixe
+  colnames(df_ttt_hab) <- paste(colnames(df_ttt_hab),"ttt_hab", sep = "_")
+  names(df_ttt_hab)[1] ="ID_SEJ"
+  df0=df_ttt_hab
+  df0=df0%>%dplyr::mutate_at(c(2:ncol(df0)), replace_na, FALSE)%>%
+    dplyr::mutate_at(c(2:ncol(df0)), as.logical)
+  df_ttt_hab=df0
+  rm(df0)
+```
+
+###Denombrement des variables binaires Rationnel: le nombre d'ATCD, de
+traitements en cours, de symptomes et d'exammens complémentaires est
+probablement un indicateur utile pour prédire la survenue d'évenements
+critiques --\> ces nombres doivent etre calculés avant la jointure des
+dataframes. --\> Cette operation correpond à une reduction de dimension
+
+```{r}
+  
+  #Creer dataframe final de décompte des sous-groupes de variables (nomre d'ATCD, de traitements en cours,de symptomes etc...)
+  df_nombre=select(crh,"ID_SEJ")
+  
+  #Nombre d'antécédents
+  data=select(crh_atcd,ID_SEJ)
+  data$nombre_ATCD=NA
+  for (x in (1:nrow(crh_atcd))) {
+    a=crh_atcd[x,]
+    b=length(a[a==TRUE])
+    data$nombre_ATCD[x]=b 
+  }
+  df_nombre=left_join(df_nombre,data,by="ID_SEJ")
+  rm(data,a,b)
+  
+  #Nombre de motifs de passage aux urgences
+  data=select(crh_motif,ID_SEJ)
+  data$nombre_motif=NA
+  for (x in (1:nrow(crh_motif))) {
+    a=crh_motif[x,]
+    b=length(a[a==TRUE])
+    data$nombre_motif[x]=b 
+  }
+  df_nombre=left_join(df_nombre,data,by="ID_SEJ")
+  rm(data,a,b)
+  
+  #Nombre d'examens complémentaires
+  data=select(crh_exam,ID_SEJ)
+  data$nombre_exam=NA
+  for (x in (1:nrow(crh_exam))) {
+    a=crh_exam[x,]
+    b=length(a[a==TRUE])
+    data$nombre_exam[x]=b 
+  }
+  df_nombre=left_join(df_nombre,data,by="ID_SEJ")
+  rm(data,a,b)
+  
+  #Nombre de symptomes
+  data=select(crh_symptomes,ID_SEJ)
+  data$nombre_symptomes=NA
+  for (x in (1:nrow(crh_symptomes))) {
+    a=crh_symptomes[x,]
+    b=length(a[a==TRUE])
+    data$nombre_symptomes[x]=b 
+  }
+  df_nombre=left_join(df_nombre,data,by="ID_SEJ")
+  rm(data,a,b)
+  
+  #Nombre de traitements en cours 
+  data=select(df_ttt_hab,ID_SEJ)
+  data$nombre_ttt_hab=NA
+  for (x in (1:nrow(df_ttt_hab))) {
+    a=crh_symptomes[x,]
+    b=length(a[a==TRUE])
+    data$nombre_ttt_hab[x]=b 
+  }
+  df_nombre=left_join(df_nombre,data,by="ID_SEJ")
+  rm(data,a,b)
+  
+  #Nombre de traitements administres aux urgences 
+  data=select(df_ttt_urg,ID_SEJ)
+  data$nombre_ttt_urg=NA
+  for (x in (1:nrow(df_ttt_urg))) {
+    a=crh_symptomes[x,]
+    b=length(a[a==TRUE])
+    data$nombre_ttt_urg[x]=b 
+  }
+  df_nombre=left_join(df_nombre,data,by="ID_SEJ")
+  rm(data,a,b)
+  
+  df0=df_nombre
+  df0=df0%>%dplyr::mutate_at(c(2:ncol(df0)), replace_na, 0)%>%
+    dplyr::mutate_at(c(2:ncol(df0)), as.numeric)
+  df_nombre=df0
+  rm(df0,x,y,atcd,antecedents,atcd_tables)
+  
+```
+
+###Jointure des dataframes binaires Objectifs: -disposer d'un seul
+dataframe ("df_bin") avec toutes les var binaires explicatives (issues
+des urgences: CRH urgences, labo, imagerie) -disposer d'un seul
+dataframe ("df outcome") avec toutes les var binaires expliquées
+(donnees post urgences: hospit et PMSI)
+
+4 étapes: -1 joindre les multiples dataframe binaires des urgences entre
+eux (ATCD, motif de venue, symptomes...)\
+-2 reduire les dataframe labo , image, hospit et PMSI à 1 ligne par
+ID-SEJ -3 joindre les df des var explicatives (urgences + labo +
+imagerie) pour former df_bin -4 joindre les df des var expliquées
+(hospit +PMSI) pour former df_outcomes
+
+#### Etape 1 :Jointure des dataframes binaires des urgences entre eux
+
+```{r}
+  #ajout suffixes aux noms des variables
+  colnames(crh_atcd) = paste(colnames(crh_atcd),"atcd_urg", sep = "_")
+  names(crh_atcd)[1] ="ID_SEJ"
+  colnames(crh_motif) <- paste(colnames(crh_motif),"motif_urg", sep = "_")
+  names(crh_motif)[1] ="ID_SEJ"
+  colnames(crh_symptomes) <- paste(colnames(crh_symptomes),"symptome_urg", sep = "_")
+  names(crh_symptomes)[1] ="ID_SEJ"
+  
+  #jointure
+  df1=left_join(crh_bin,crh_atcd,by="ID_SEJ" )
+  df1=left_join(df1,crh_motif,by="ID_SEJ" )
+  df1=left_join(df1,crh_symptomes,by="ID_SEJ" )
+  
+  #retrait des textes inutiles
+  crh_bin=df1
+  rm(df1)
+```
+
+#### Etape 2: reduction des df imagerie , labo, hospit et PMSI
+
+Explication: il faut réduire ces df à une seule ligne par ID_SEJ
+Exemple: si 1 séjour aux urgences (AVC) entraine une hospit dans 2
+services (neuro puis medecine polyvalente) , il y a 2 lignes dans le df
+hospit et 1 dans le df urgence. Il faut reduire a 1 ligne par ID_sej
+avant de faire une jointure) Remarque: on ne resume pas les crh des
+urgences car un patient peut venir plusieurs fois aux urg sur la periode
+de l etude
+
+```{r}
+  #reduction pour hospit_bin
+  df0=hosp_bin
+  n=ncol(df0)-1
+  df1 = df0 %>% 
+    dplyr::group_by(ID_SEJ) %>% 
+    dplyr::summarise(across(c(1:n),any))
+  summary(df1)
+  hosp_bin_atomic=df1
+  rm(df1)
+  
+  #reduction pour pmsi_bin
+  df0=pmsi_bin
+  n=ncol(df0)-1
+  df1 = df0 %>% 
+    dplyr::group_by(ID_SEJ) %>% 
+    dplyr::summarise(across(c(1:n),any))
+  summary(df1)
+  pmsi_bin_atomic=df1
+  rm(df1)
+  
+  #reduction pour labo_bin
+  df0=labo_bin
+  n=ncol(df0)-1
+  df1 = df0 %>% 
+    dplyr::group_by(ID_SEJ) %>% 
+    dplyr::summarise(across(c(1:n),any))
+  summary(df1)
+  labo_bin_atomic=df1#donc ici le nb de ligne image_bin_atomic doit etre identique ou inferieur a celui de crh.
+  
+  #reduction pour crh_exam
+  df0=crh_exam
+  n=ncol(df0)-1
+  df1 = df0 %>% 
+    dplyr::group_by(ID_SEJ) %>% 
+    dplyr::summarise(across(c(1:n),any))
+  summary(df1)
+  crh_exam_atomic=df1#donc ici le nb de ligne labo_bin_atomic doit etre identique ou inferieur a celui de crh.
+  rm(df1)
+  
+  #retirer colonnes vides 
+  df0=hosp_bin_atomic
+  df1=df0 %>% discard(~all(is.na(.) | . ==""))
+  hosp_bin_atomic=df1
+  
+  df0=pmsi_bin_atomic
+  df1=df0 %>% discard(~all(is.na(.) | . ==""))
+  pmsi_bin_atomic=df1
+  
+  df0=crh_exam_atomic
+  df1=df0 %>% discard(~all(is.na(.) | . ==""))
+  crh_exam_atomic=df1
+  
+  df0=labo_bin_atomic
+  df1=df0 %>% discard(~all(is.na(.) | . ==""))
+  labo_bin_atomic=df1
+  
+```
+
+#### Etape 3: joindre les dataframes des variables explicatives
+
+```{r}
+  #jointures de urgences, examens complementaires et labo 
+  df0=left_join(crh_bin,crh_exam_atomic,by="ID_SEJ")
+  df0=left_join(df0,labo_bin_atomic,by="ID_SEJ")
+  df_bin=df0
+  
+  
+  #Jointure avec traitements
+  df0=df_bin
+  df1=left_join(df0,df_ttt_hab,by="ID_SEJ")
+  df2=left_join(df1,df_ttt_urg,by="ID_SEJ")
+  df_bin=df2
+  rm(df0,df1,df2)
+  
+  df0=df_bin
+  summary(df0)
+  df1=df0%>%map_dfr(replace_na,FALSE)
+  summary(df1)
+  df_bin=df1
+  rm(df0,df1)
+  summary(df_bin)
+  
+```
+
+#### Etape 4: joindre les df des var expliquées
+
+Les outcomes sont cherchés dans dans le PMSI L'objectif principal de ce
+projet est de prédire l'administration de soins critiques durant
+l'hospitalisation. Cette variable comprend l'ensemble des thérapeutiques
+dont le délai d'administration est susceptible d'impacter la survie ou
+le pronostic fonctionnel du patient. A titre d'exemple, les traitements
+nécessaires au maintien de la fonction circulatoire (amines),
+respiratoire (intubation) constituent des soins critiques.
+
+```{r}
+  
+  #jointures de hospit et pmsi et creation du df outcome
+  df0=left_join(hosp_bin_atomic,pmsi_bin_atomic,by="ID_SEJ")
+  df1=left_join(df0,df_hospit,by="ID_SEJ")
+  id_sej=crh%>%select("ID_SEJ")
+  df1=left_join(id_sej,df1)
+  df_outcome=df1
+  rm(df0,df1,id_sej)
+  df0=df_outcome
+  summary(df0)
+  df1=df0%>%map_dfr(replace_na,FALSE)
+  summary(df1)
+  df_outcome=df1
+  rm(df0,df1)
+  summary(df_outcome)
+```
+
+### Encodage des outcomes binaires calculés
+
+certaines variables complexes sont encodées à la fin car elles sont
+dependantes de plusieurs autre variables. Exemple: intubation EN service
+POUR detresse respiratoire
+
+```{r}
+  #intubation en service pour detresse respiratoire sans intubation aux urgences.On veut détecter les intubations en service pour detresse respiratoire (nb: on ne veut pas compter les intubations au bloc operatoire pour une fracture de cheville). On ne veut pas detecter les patients deja intubés aux urgences. Donc outcome = (intubation en service) ET  (pas d'intubation aux urgences) ET (dyspnée aux urg OU dypnee dans service)
+  
+  df_outcome$intub_hosp_dyspnee=NA
+  df_outcome$intub_hosp_dyspnee=ifelse(# ERREUR sur cette commande car df de dimensions differentes visiblement
+    (df_outcome$dyspnee_hosp=="TRUE"|df_bin$dyspnee_urg=="TRUE") &
+      (df_outcome$intubation_hosp=="TRUE") &
+      (df_bin$intubation_urg=="FALSE"),
+    "TRUE","FALSE")
+  
+  df_outcome$intub_hosp_dyspnee=as.logical(df_outcome$intub_hosp_dyspnee)#convertit en boolean
+  
+  #Résumé des outcomes
+  summary(df_outcome)
+```
+
+## Encodage des variables numeriques
+
+### Biologie
+
+#### Ionogramme
+
+```{r}
+  #1er ionogramme 
+  df0=labo
+  df1=df0%>%filter(str_detect(TEXTE_AFFICHAGE,"Sodium"))
+  df2=df1%>%group_by(ID_SEJ)%>%dplyr::summarise(first(TEXTE_AFFICHAGE))
+  names(df2)[names(df2) == "first(TEXTE_AFFICHAGE)"] <- "TEXTE_AFFICHAGE"
+  iono_first=df2#dataframe des 1er iono de chaque patient
+  rm(df0,df1,df2)
+
+  #structurer ionogramme
+  df0=iono_first#%>%slice(1:5)
+  df1=df0%>%mutate(new=map(df0$TEXTE_AFFICHAGE,as.character))
+  df1=df0%>%mutate(new=map(df0$TEXTE_AFFICHAGE,read_html,options="HUGE"))
+  df2=df1%>%mutate(new1=map(df1$new,html_nodes,"table"))
+  df3=df2%>%mutate(new2=map(df2$new1,html_table,fill=TRUE))
+  df4=df3%>%mutate(new3=map(df3$new2,pluck,2))
+  
+  #Eliminer les cellules de df4$new3 qui sont vides
+  test2=df4%>%mutate(nb_var=map(new3,ncol))
+  test2=test2%>%select(ID_SEJ,new3,nb_var)
+  test2$nb_var_num=test2$nb_var%>%as.character%>%as.numeric
+  test3=tibble(test2)
+  summary(test3$nb_var_num)
+  test4=test3%>%filter(nb_var_num==5)
+
+  if (nrow(test4)>0) {
+    test5=test4%>%select(ID_SEJ,new3)
+    df4_1=test5
+    rm(test,test1,test2,test3,test4,test5,a,df0,df1)
+    df4=df4_1%>%mutate(new4=map(df4_1$new3,select,c(1:2)))
+    rm(df4_1)
+    df4=df4%>%mutate(new5=map(df4$new4,distinct))
+    df4=df4%>%mutate(new6=map(df4$new5,distinct))
+    df5=select(df4,c("ID_SEJ","new5"))
+    df6=unnest(df5,new5)
+    df6$val=gsub("[^0-9.]","",df6$Valeur)#
+    df6=select(df6,-"Valeur")
+    df6$val=as.numeric(df6$val)
+    df7=filter(df6,is.na(df6$val)==FALSE) 
+    df7=filter(distinct(df7))
+    df7=df7%>%group_by(ID_SEJ)%>% distinct(Libellés,.keep_all=TRUE)
+    df8=pivot_wider(df7,names_from = "Libellés",values_from = "val")
+    df9=df8%>%unnest(cols = c(1:ncol(df8)))
+    iono_final=df9
+  } else {iono_final=iono_first%>%select(ID_SEJ)}
+  
+  rm(df9,n,df2,df3,df4,df5,df6,df7,df8,iono_first)
+  
+```
+
+#### Structurer NFS
+
+```{r}
+  #1 ere NFS 
+  df0=labo
+  df1=df0%>%filter(str_detect(TEXTE_AFFICHAGE,"Hémoglobine"))
+  df2=df1%>%group_by(ID_SEJ)%>%dplyr::summarise(first(TEXTE_AFFICHAGE))
+  names(df2)[names(df2) == "first(TEXTE_AFFICHAGE)"] <- "TEXTE_AFFICHAGE"
+  nfs_first=df2
+  rm(df0,df1,df2)
+  df0=nfs_first
+  df1=df0%>%mutate(new=map(df0$TEXTE_AFFICHAGE,read_html,options="HUGE"))
+  df2=df1%>%mutate(new1=map(df1$new,html_nodes,"table"))
+  test=df2%>%filter(!ID_SEJ%in%c(14230996,14287993)) 
+  df2=test
+  df3=df2%>%mutate(new2=map(df2$new1,html_table,fill=TRUE))
+  df4=df3%>%mutate(new3=map(df3$new2,pluck,2))
+  test2=df4%>%mutate(nb_var=map(new3,ncol))
+  test2=test2%>%select(ID_SEJ,new3,nb_var)
+  test2$nb_var_num=test2$nb_var%>%as.character%>%as.numeric
+  test3=tibble(test2)
+  summary(test3$nb_var_num)
+  test4=test3%>%filter(nb_var_num==5)
+  if(nrow(test4)>0) {
+    test5=test4%>%select(ID_SEJ,new3)
+    df4_1=test5
+    rm(test,test1,test2,test3,test4,test5,a,df0,df1)
+    test=df4_1%>%mutate(new4=map(df4_1$new3,select,c(1:2)))
+    df4=test
+    rm(df4_1)
+    df4=df4%>%mutate(new5=map(df4$new4,distinct))
+    df4=df4%>%mutate(new6=map(df4$new5,distinct))
+    df5=select(df4,c("ID_SEJ","new5"))
+    df6=unnest(df5,new5)
+    df6$val=gsub("[^0-9.]","",df6$Valeur)#
+    df6=select(df6,-"Valeur")
+    df6$val=as.numeric(df6$val)
+    df7=filter(df6,is.na(df6$val)==FALSE)
+    df7=filter(distinct(df7))
+    df7=df7%>%group_by(ID_SEJ)%>% distinct(Libellés,.keep_all=TRUE)
+    df8=pivot_wider(df7,names_from = "Libellés",values_from = "val")
+    nfs_final=df8
+  } else {nfs_final=nfs_first%>%select(ID_SEJ)}
+
+```
+
+```{r}
+  rm(df3,df4,df5,df6,df7,df8,df9,test,nfs_first)
+```
+
+####Renommer les dataframes
+
+```{r}
+  df_nfs=nfs_final
+  df_iono=iono_final
+  rm(nfs_final,iono_final)
+```
+
+###Constantes vitales
+
+### Structurer Constantes
+
+```{r}
+df_cst=tibble(NA)
+  df0=crh
+  
+  for (x in 1:nrow(df0)){
+    tryCatch({
+      df0_x=filter(df0[x,]) 
+      df0_x=get_tidy_resurgences(df0_x$TEXTE_AFFICHAGE) 
+      cst=df0_x%>%filter (titre=="CONSTANTE")
+      const_values <- cst$texte_html %>%
+        xml2::read_html(options="HUGE") %>% rvest::html_node("#divValeurSurvPancarte table, #divValeurSurvConstante table") 
+      const_values=const_values%>%rvest::html_table(trim = TRUE, fill = TRUE)
+      const_dates <- cst$texte_html %>% xml2::read_html(options="HUGE") %>% 
+        rvest::html_node("#hourDivSurvPancarte table, #hourDivSurvConstante table") %>% 
+        rvest::html_table(header = FALSE, trim = TRUE)
+      a=t(const_dates)
+      b=a[!duplicated(a),]
+      c=t(b)
+      const_dates=c
+      const_keys <- cst$texte_html %>% xml2::read_html(options="HUGE") %>% 
+        rvest::html_node("#divListeSurvPancarte table, #divListeSurvConstante table") %>% 
+        rvest::html_table(trim = TRUE) %>% dplyr::rename(key = "X1") 
+      result <- const_values %>% dplyr::rename_at(dplyr::vars(names(.)), 
+                                                  ~purrr::as_vector(const_dates)) %>% dplyr::bind_cols(const_keys) %>% 
+        dplyr::mutate_all(~as.character(.)) %>% tidyr::pivot_longer(-key, 
+                                                                    names_to = "date", values_to = "value") %>% 
+        dplyr::na_if("") %>% dplyr::filter(!stringr::str_detect(key, 
+                                                                "^surveillances")) %>% dplyr::filter(!stringr::str_detect(key, 
+                                                                                                                          "^integrite"))
+      result <- result %>% dplyr::group_by(key) %>% 
+        dplyr::mutate(row = dplyr::row_number()) %>% 
+        tidyr::pivot_wider(names_from = "key", values_from = "value") %>% 
+        dplyr::arrange(date) %>% dplyr::select(-row)
+      result$ID_SEJ=df0[x,]$ID_SEJ
+      df_cst=rbind.fill(df_cst,result) 
+      rm(result)
+      rm(df0_x,cst,const_values,const_dates,a,b,c,const_keys)
+    }, error=function(e){
+      a=1#remplace "bug patient"
+    })
+  }
+  df_cst=df_cst[-1, -1]
+  
+```
+
+```{r}
+  #Ne conserver que les 1eres valeurs
+  df0=df_cst
+  n=ncol(df0)-1
+  df1=df0%>%group_by(ID_SEJ)%>%dplyr::summarise(across(c(1:n),first))
+  df_cst_first=df1
+  rm(df0,df1,b,n,x,a,c,const_dates,const_dates,const_keys,const_values,result,cst,crh_x)
+  df0=df_cst_first
+  df1=df0%>%dplyr::mutate_at(c(3:ncol(df0)), stringr::str_replace_all, "[a-zA-Z]", "")
+  df2=df1%>%dplyr::mutate_at(c(3:ncol(df1)), stringr::str_replace_all, ",", ".")%>%
+    mutate_at(colnames(df1),unlist)%>%
+    mutate_at(colnames(df1),as.numeric)
+  df3=df2 %>% discard(~all(is.na(.) | . ==""))
+  df_cst_first=df3
+  rm(df0,df1,df2,df3,df_cst)
+```
+
+### Age du patient
+
+```{r}
+  df_age=select(crh,c("ID_SEJ","AGE_PAT"))
+  df_age$AGE_PAT=as.numeric(df_age$AGE_PAT)
+```
+
+###Temps de passage aux urgences
+
+```{r}
+  df0=crh
+  df_temps_passage=select(df0,ID_SEJ)
+  df_temps_passage$temps_urg=NA
+  
+  x=12
+  for (x in 1:nrow(df0)) {
+    df0_x=df0[x,"TEXTE_AFFICHAGE"]
+    
+    #Date et heure d'arrivee aux urgences
+    date=sub(".*Date d'arrivée : <b>" , "", df0_x)  #selectionnne ce qui est apres "Date d'arrivée : <b>"
+    date=sub("</b><br>Personne.*","",date)#selectionnne ce qui est avant "</b><br>Personne"
+    date_arr=sub("</b> à.*","",date)
+    heure_arr=sub(".*<b>","",date)
+    
+    #Date et Heure de decision medicale de sortie des urgences.
+    date=sub(".*Décision médicale: <b>" , "", df0_x)  
+    date=sub("</b>.*","",date)
+    date_sor=sub(" .*","",date)
+    heure_sor=sub(".* ","",date)
+    
+    #formattage
+    a=paste(date_arr,heure_arr,sep = ",")
+    a=dmy_hm(a)
+    
+    b=paste(date_sor,heure_sor,sep = ",")
+    b=dmy_hm(b)
+    
+    #Temps de passage urgences:
+    c=a %--% b#fabrique la variable de durée au format  "time interval" 
+    c=as.duration(c)
+    c=as.numeric(c)#c'est le temps de passage en secondes
+    c=c/3600#temps de passage en heures
+    df_temps_passage[x,2]=c
+  }
+  summary(df_temps_passage$temps_urg)
+
+
+```
+
+```{r}
+  rm(a,b,c,date,date_arr,date_sor,heure_arr,heure_sor,df0_x,x, df0)
+  
+  # Retirer valeurs aberrantes du temps de passage
+  df0=df_temps_passage
+  x=12
+  for (x in 1:nrow(df0))  {
+    a=df0$temps_urg[x]<0
+    b=df0$temps_urg[x]>164#164 heures =1 semaine
+    if(is.na(a)){
+      a=TRUE
+    }
+    if(is.na(b)){
+      b=TRUE
+    }
+    
+    if(a==TRUE) {
+      df0$temps_urg[x]=NA
+    }
+    if(b==TRUE) {
+      df0$temps_urg[x]=NA
+    }
+  }
+  df_temps_passage=df0
+  rm(df0)
+```
+
+###Jointures des dataframes numériques
+
+```{r}
+  
+  df0=full_join(df_nfs,df_iono, by="ID_SEJ",  suffix = c("_nfs", "_iono"))
+  df1=full_join(df0,df_cst_first, by="ID_SEJ")
+  df2=left_join(df1,df_age)
+  df3=left_join(df2,df_temps_passage)
+  df4=left_join(df3,df_nombre)
+  df_num=df4
+  rm(df0,df1,df2,df3,df4)
+```
+
+#Preparation des données Objectif: créer 2 dataframes définitifs sur
+lesquels porteront les analyses -df_outcome comportera les variables
+expliquées -df_final comportera les variables explicatives
+
+## Création des dataframes
+
+###Dataframe des variables predictives (df_final)
+
+```{r}
+df_final=left_join(df_bin,df_num,by="ID_SEJ")
+
+```
+
+#Jointure des dataframes
+
+```{r}
+
+rm(list = setdiff(ls(), c("df_outcome","df_final","id_urg_hosp","crh_dates")))
+df0=crh_dates%>%select(where(is.numeric) | where(is.logical))
+df1=left_join(df0,df_final,by="ID_SEJ")
+df_final=df1
+rm(df0,df1,crh_dates,id_urg_hosp)
+```
+
+#PREPARATION MODELISATION
+
+##Formater noms variables
+
+```{r}
+#Création fonction
+var_norm <- function(a) {
+  a<-str_to_lower(a)
+  a<-str_replace_all(a, '[[:punct:] ]+',"_")
+  a=iconv(a,to="ASCII//TRANSLIT")#enleve les accents
+  return(a)
+}
+
+#Formattage de tous les noms sauf ID_SEJ
+df0=df_final
+names=names(df0)
+names=var_norm(names)
+names(df0)=names
+names(df0)[names(df0) == "id_sej"] <- "ID_SEJ"
+df_final=df0
+rm(df0,noms,var_norm)
+
+#retirer les noms de variables dupliqués
+#Identifier les doublons de noms de variables
+names=names(df_final)
+dupl=duplicated(names)
+summary(dupl)
+df0=df_final
+names(df0) <- make.names(names(df0), unique=TRUE)
+names(df0)[names(df0) == "id_sej"] <- "ID_SEJ"
+#verifier qu'il n'y a plus de doublons et reformater les noms
+names=names(df0)
+dupl=duplicated(names)
+summary(dupl)
+df_final=df0
+rm(names,dupl,df0,a,b)
+summary(duplicated(df_final$ID_SEJ))
+summary(duplicated(df_outcome$ID_SEJ))
+```
+
+##Reduction nombre variables On va retirer les variables tres peu
+présentes dans le dataframe pour réduire le temps de calcul de l'analyse
+
+```{r}
+#Creer df numeriques et binaire 
+df_final_num=select_if(df_final,is.numeric)#dataframe avec les valeurs numeriques
+df_final_bin=select_if(df_final,is_logical)#dataframe avec les valeurs  binaires
+df_final_bin$ID_SEJ=df_final$ID_SEJ
+df_final_bin=df_final_bin%>% replace(is.na(.), FALSE)
+
+df0=df_final_bin
+df1=select(df0,ID_SEJ)
+x=1
+for (x in 1:ncol(df0)) {
+  a=count(df0[,x])
+  
+  if ((nrow(a)==2 & a[1,2]>500 & a[2,2]>500)=="TRUE") {
+    nom=names(df0[x])
+    colonne=select(df0,nom)
+    df1=cbind(df1,colonne)
+  }
+}
+df_final_bin=df1
+rm(df0, df1, x, nom, a, colonne)
+
+df0=df_final_num
+df1=select(df0,ID_SEJ)
+for (x in 2:ncol(df0)) {
+  a=sum(!is.na(df0[,x]))
+  
+  if ((a>500) ==TRUE) {
+    nom=names(df0[x])
+    colonne=select(df0,nom)
+    df1=cbind(df1,colonne)
+  }
+}
+df_final_num=df1
+rm(df0, df1, x, nom, a, colonne)
+df_final=left_join(df_final_bin,df_final_num)
+rm(df_final_bin,df_final_num)
+```
+
+## Optimisation des outcomes
+
+### Outcomes aux urgences
+
+Explication: si on intube aux urgences et q'il y a mention d'intubation
+dans le compte rendu de reanimation, on remplira la colonne "intubation
+en service"=FALSE
+
+#### normalisation textes urgences
+
+```{r}
+urg_text_norm <- function(a) {
+  a<-str_to_lower(a)
+  a<-str_replace_all(a, '[[:punct:] ]+'," ")
+  a=iconv(a,to="ASCII//TRANSLIT")
+  a <- str_replace_all(a, " d | de | du ", " ")
+  return(a)
+}
+
+crh_var_supp=crh%>%select(ID_SEJ,texte_orientation,texte_conclusion, texte_urg)
+crh_var_supp$texte_orientation=urg_text_norm(crh_var_supp$texte_orientation)
+crh_var_supp$texte_conclusion=urg_text_norm(crh_var_supp$texte_conclusion)
+crh_var_supp$texte_urg=urg_text_norm(crh_var_supp$texte_urg)
+rm(a,urg_text_norm)
+```
+
+####Détecter deces aux urgences
+
+```{r}
+df0=crh_var_supp
+df0$keyword =str_detect(df0$texte_urg, "arret cardiaque|deces|deced|\\acr\\b ")
+df0=df0%>%filter(df0$keyword==TRUE)
+df0=df0%>%select(-keyword)
+
+
+#Eliminer les patients qui ne sont pas decedes aux urgences 
+# Fonction pour détecter les mots-clés à proximité du mot "patient" ou "patiente" et vérifier l'absence des mots interdits
+detect_keywords <- function(text, words, distance, forbidden_words) {
+  pattern_keywords <- paste0('(?i)\\b(patien(?:t|te))\\b(?:\\W+\\w+){0,', distance, '}\\W+(?:', paste(words, collapse = '|'), ')\\b|\\b(?:', paste(words, collapse = '|'), ')\\b(?:\\W+\\w+){0,', distance, '}\\W+\\b(patien(?:t|te))\\b')
+  pattern_forbidden <- paste0('(?i)\\b(patien(?:t|te))\\b(?:\\W+\\w+){0,', distance, '}\\W+(?:', paste(forbidden_words, collapse = '|'), ')|(?:', paste(forbidden_words, collapse = '|'), ')\\b(?:\\W+\\w+){0,', distance, '}\\W+\\b(patien(?:t|te))\\b')
+  
+  return(str_detect(text, pattern_keywords) & !str_detect(text, pattern_forbidden))
+}
+
+# Liste des mots à détecter à proximité de "patient" ou "patiente"
+keywords <- c("deces", "deced", "dcd")#"\\bacr\\b" enlevé
+
+# Liste des mots interdits
+forbidden_words <- c("si","deux","impute", "depui","depuis", "cas", "risque", "potentiel", "possible", "suspicion","convaincu", "appele", "appel","apre","anne", "pere", "mere","pater", "mater", "maternels","frere","soeur","enfant","enfants","fils","fille","tante","enfant","antedecent","antedecents","atcd", "proche", "proches", "femme", "mari", "conjoint","conjointe","ami","amie","epouse","epoux","neveu","niece")
+
+# Appliquer la fonction de détection sur la colonne "texte_urg"
+df0$deces_urg <- sapply(df0$texte_urg, detect_keywords, words = keywords, distance = 10, forbidden_words = forbidden_words)
+df0=df0%>%filter(df0$deces_urg==TRUE)
+df0=df0%>%select(ID_SEJ,deces_urg)
+df1=left_join(crh_var_supp,df0, by="ID_SEJ")
+df1=df1%>%map_dfr(replace_na,FALSE)#remplace NA par FALSE
+crh_var_supp=df1
+rm(df0,df1,keywords,forbidden_words,detect_keywords,pattern_keywords)
+```
+
+####Détecter intubation aux urgences
+
+```{r}
+
+df0=crh_var_supp
+
+keywords <- c("intub", "celo", "\\eto\\b", "etomidate")
+exclusions <- c("pas", "souhaite pas", "refus","deraison")
+
+df0$keyword <- sapply(df0$texte_urg, function(text) {
+  any(sapply(keywords, function(kw) {
+    kw_match <- str_match_all(text, sprintf("(?<=\\W|^)%s(?=\\W|$)", kw))
+    if(length(kw_match[[1]]) > 0) {
+      for(match in kw_match[[1]]) {
+        if(!any(sapply(exclusions, function(excl) {
+          str_detect(text, sprintf("(?<=\\W|^)(?:\\S+\\s+){0,10}%s\\s+(?:\\S+\\s+){0,10}%s(?=\\W|$)", excl, match))
+        }))) {
+          return(TRUE)
+        }
+      }
+    }
+    return(FALSE)
+  }))
+})
+colnames(df0)[colnames(df0) == "keyword"] <- "intubation_urgences"
+
+crh_var_supp=df0
+```
+
+####Détecter limitation therapeutique aux urgences
+
+```{r}
+df0 <- crh_var_supp# %>% slice(1:1000)
+
+#Detecter lata aux urgences
+
+
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+keywords <- c("limitation", "lata", "paliative", "palliative", "palia", "pallia")
+#cette ligne prends 1-2h
+df0 <- df0 %>%
+  mutate(texte_urg = str_replace_all(texte_urg, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_urg, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+sauvegarde test.Rdata
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("pas","sans","membre","activite", "trauma","exam","mouve", "refus", "artic","doul","ampli","ouver","mobili","effort","elective", "perim","marche","flexi","exten","rota","abduc","addu")
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))#créee une variables string qui comporte des TRUE et des FALSE (ou rien)
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(lata_urgences = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))
+
+#Tester "pas d'acharnement therapeutique"
+df0 <- df0 %>%
+   mutate(pas_acharnement_urg = str_detect(texte_urg, "pas acharnement") | str_detect(texte_urg, "pas d acharnement")| str_detect(texte_urg, "soins confort")| str_detect(texte_urg, "soin confort"))
+
+#Variable finale qui tient compte de lata et acharnement
+df0$lata_urg <- ifelse(df0$lata_urgences == TRUE | df0$pas_acharnement_urg == TRUE, TRUE, FALSE)
+df1=df0%>%select(ID_SEJ,lata_urg)
+df2=left_join(crh_var_supp,df1,by="ID_SEJ")
+crh_var_supp=df2
+
+rm(df0,df1,df2,keywords,exclusions)
+```
+
+####Détecter ACR aux urgences
+
+```{r}
+
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+
+df0 <- crh_var_supp 
+keywords <- c("acr", "arret cardiaque","aret cardiaque", "massage cardiaque", "mce")
+
+df0 <- df0 %>%
+  mutate(texte_conclusion = str_replace_all(texte_conclusion, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_conclusion, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("pas","sans","anne","risque","suspi","refus","atcd","antece","absence","confort","limit","cas","eventu")
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(ACR_urgences = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))
+
+df1=df0%>%select(ID_SEJ,ACR_urgences)
+df2=left_join(crh_var_supp,df1,by="ID_SEJ")
+crh_var_supp=df2
+df0=crh_var_supp
+df0 <- df0 %>% mutate(across(everything(), ~ifelse(is.na(.), FALSE, .)))
+crh_var_supp=df0
+rm(df0,df1,df2,keywords,exclusions,motif_patterns,negation_pattern,find_motif,urg_text_html)
+names(crh_var_supp)[names(crh_var_supp) == "intubation_urgences"] <- "intubation_urg"
+names(crh_var_supp)[names(crh_var_supp) == "ACR_urgences"] <- "ACR_urg"
+
+
+```
+
+####Sauvegarder uniquement crh_var_supp on l'ajoutera dans l'analyse
+finale
+
+```{r}
+rm(list = setdiff(ls(), c("crh_var_supp")))
+#save.image("~/crh_var_supp.RData")# sauvegarde si besoin
+crh_var_supp=crh_var_supp%>%select(ID_SEJ,deces_urg,intubation_urg,lata_urg,ACR_urg)
+
+```
+
+###Outcomes en hospitalisation
+
+#####dataframes
+
+```{r}
+load("~/temp2.RData")
+rm(list = setdiff(ls(), c("pmsi","hosp")))
+load("~/crh_var_supp.RData")
+id=crh_var_supp%>%select(ID_SEJ)
+
+
+```
+
+#####deces en hospitalisation
+
+```{r}
+df0 <- pmsi%>%select(ID_SEJ,texte_pmsi)# %>% slice(1:1000)
+
+#Detecter lata 
+
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+keywords <- c("deces", "decede", "mort")
+
+df0 <- df0 %>%
+  mutate(texte_pmsi = str_replace_all(texte_pmsi, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_pmsi, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("pas","sans")
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))#on créee une variables string qui comporte des TRUE et des FALSE (ou rien)
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(deces = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))
+
+
+df1=df0%>%select(ID_SEJ,deces)
+
+df1=df1%>%map_dfr(replace_na,FALSE)
+df2 <- df1 %>%
+  group_by(ID_SEJ) %>%
+  mutate(deces_hospit = any(deces == TRUE)) %>%
+  distinct(ID_SEJ, .keep_all = TRUE)%>%select(ID_SEJ,deces_hospit)
+
+crh_var_supp_hosp=left_join(id,df2)
+
+rm(df0,df1,df2,keywords,exclusions,id)
+```
+
+##### intubation critique en hospit
+
+######intubation en hospit en hospit c'est coté dans le pmsi
+
+```{r}
+df0 <- pmsi%>%select(ID_SEJ,texte_pmsi)# %>% slice(1:5000)
+
+#DETECTER INTUBATION 
+
+
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+keywords <- c("intubation tracheale", "ventilation mecanique intratracheale")
+
+df0 <- df0 %>%
+  mutate(texte_pmsi = str_replace_all(texte_pmsi, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_pmsi, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("dehors")
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))#on créee une variables string qui comporte des TRUE et des FALSE (ou rien)
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(intubation = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))
+df1=df0%>%select(ID_SEJ,intubation)
+df1=df1%>%map_dfr(replace_na,FALSE)
+df2 <- df1 %>%
+  group_by(ID_SEJ) %>%
+  mutate(intubation_hospit = any(intubation == TRUE)) %>%
+  distinct(ID_SEJ, .keep_all = TRUE)%>%select(ID_SEJ,intubation_hospit)
+df3=left_join(crh_var_supp_hosp,df2)
+crh_var_supp_hosp=df3
+rm(df0,df1,df2,df3,keywords,exclusions)
+```
+
+###### dyspnée ou coma en hospit
+
+En effet, l'outcome "intubation" est soumis a la presence de coma ou
+insuff respiratoire car sinon il englobe les intubation au bloc
+operatoire pour de la chirurgie sans urgence (ex: fracture avant bras)
+et on est plus dans les soins critiques
+
+```{r}
+df0 <- pmsi%>%select(ID_SEJ,texte_pmsi)# %>% slice(1:5000)
+
+
+#DETECTER MOTS CLES 
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+keywords <- c("insuffisance respiratoire aigue", "coma")
+
+df0 <- df0 %>%
+  mutate(texte_pmsi = str_replace_all(texte_pmsi, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_pmsi, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("dehors")
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(outcome = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))
+
+df1=df0%>%select(ID_SEJ,outcome)
+
+df1=df1%>%map_dfr(replace_na,FALSE)#remplace NA par FALSE
+#IMPORTANT PERMET DE RESUMER A UNE LIGNE PAR PATIENT ET COTER TRUE AUANT AU MOINS UN LIGNE DE PMSI A MENTIONNE DECES 
+#en effet, certains patients ont plusierus lignes ID_SEJ avec plusieurs PMSI et il faut resuler avec group by any distinct
+df2 <- df1 %>%
+  group_by(ID_SEJ) %>%
+  mutate(outcome_final = any(outcome == TRUE)) %>%
+  distinct(ID_SEJ, .keep_all = TRUE)%>%select(ID_SEJ,outcome_final)
+
+#DONNER LE NOM DE LA VARIABLE D INTERET
+names(df2)[names(df2) == "outcome_final"] <- "dyspnee_coma_hospit"
+
+df3=left_join(crh_var_supp_hosp,df2)#normalement ce df a le mem nombre de lignes que les autres (1 par patient, 1 pour tous les patients)
+crh_var_supp_hosp=df3
+
+rm(df0,df1,df2,df3,keywords,exclusions)
+```
+
+###### test logique intubation+coma/dyspnée
+
+L'obtention de la var finale se fait par test logique sur les 2 var
+précédentes et permet d'obtenir l'outcome recherché: intubation en
+raison d'un detresse respiratoire ou d'un coma qui est l'intubation en
+situation "critique" contrairement à une intubation pour chirurgie
+benigne
+
+```{r}
+df0 <- crh_var_supp_hosp %>%
+  mutate(intubation_critique_hospit =dyspnee_coma_hospit & intubation_hospit)
+df1=df0%>%select(-"intubation_hospit",-"dyspnee_coma_hospit")
+crh_var_supp_hosp=df1
+rm(df0,df1)
+```
+
+#####Arret cardiaque en hospitalisation en hospit c'est coté dans le
+pmsi
+
+```{r}
+df0 <- pmsi%>%select(ID_SEJ,texte_pmsi)# %>% slice(1:5000)
+
+#DETECTER MOTS CLES 
+
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+keywords <- c("arret cardiaque")
+
+df0 <- df0 %>%
+  mutate(texte_pmsi = str_replace_all(texte_pmsi, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_pmsi, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("dfgd6eqs","df78dre")#mot inexistant pour garder meme script dans ce cas
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))#on créee une variables string qui comporte des TRUE et des FALSE (ou rien)
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(outcome = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))e
+
+df1=df0%>%select(ID_SEJ,outcome)
+
+df1=df1%>%map_dfr(replace_na,FALSE)#remplace NA par FALSE
+df2 <- df1 %>%
+  group_by(ID_SEJ) %>%
+  mutate(outcome_final = any(outcome == TRUE)) %>%
+  distinct(ID_SEJ, .keep_all = TRUE)%>%select(ID_SEJ,outcome_final)
+
+names(df2)[names(df2) == "outcome_final"] <- "ACR_hospit"
+
+df3=left_join(crh_var_supp_hosp,df2)#normalement ce df a le mem nombre de lignes que les autres (1 par patient, 1 pour tous les patients)
+crh_var_supp_hosp=df3
+
+rm(df0,df1,df2,df3,keywords,exclusions)
+```
+
+#####LATA en hospit
+
+```{r}
+df0 <- pmsi%>%select(ID_SEJ,texte_pmsi)# %>% slice(1:5000)
+
+#DETECTER MOTS CLES 
+
+##Étape 1: Créer une nouvelle variable avec les expressions contenant les mots clés.
+keywords <- c("palliatif","palliatifs")
+
+df0 <- df0 %>%
+  mutate(texte_pmsi = str_replace_all(texte_pmsi, "\\s+", " "), # Replace line breaks and consecutive spaces with a single space
+         keyword_phrases = map(texte_pmsi, ~{
+           keyword_phrases <- str_extract_all(.x, sprintf("\\b(?:\\S+\\s+){0,10}%s(?:\\s+\\S+){0,10}\\b", keywords))#extraire les expressions comprenant mots cles +/- 10 mots
+           keyword_phrases <- unlist(keyword_phrases)
+           keyword_phrases
+         }))
+
+
+##Étape 2: Tester chaque expression pour voir si elle contient un mot interdit.
+exclusions <- c("dfgd6eqs","df78dre")#mot inexistant pour garder meme script dans ce cas
+
+df0 <- df0 %>%
+  mutate(exclusion_present = map(keyword_phrases, ~{
+    exclusion_present <- sapply(.x, function(phrase) any(str_detect(tolower(phrase), exclusions)))
+    exclusion_present
+  }))
+
+##Étape 3: Tester chaque case pour voir si elle contient au moins une expression avec mot clé sans mot interdit.
+
+### var chr pour mot interdit
+df0 <- df0 %>%
+  mutate(exclusion_present_str = sapply(exclusion_present, paste, collapse = ","))#on créee une variables string qui comporte des TRUE et des FALSE (ou rien)
+
+### test logique  : presence de FALSE dans "exclusions_present"
+df0 <- df0 %>%
+  mutate(outcome = case_when(
+    exclusion_present_str == "" ~ NA,
+    grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ TRUE,
+    exclusion_present_str != "" & !grepl("FALSE", exclusion_present_str, ignore.case = TRUE) ~ FALSE
+  ))
+
+df1=df0%>%select(ID_SEJ,outcome)
+
+df1=df1%>%map_dfr(replace_na,FALSE)#remplace NA par FALSE
+df2 <- df1 %>%
+  group_by(ID_SEJ) %>%
+  mutate(outcome_final = any(outcome == TRUE)) %>%
+  distinct(ID_SEJ, .keep_all = TRUE)%>%select(ID_SEJ,outcome_final)
+
+names(df2)[names(df2) == "outcome_final"] <- "lata_hospit"
+
+df3=left_join(crh_var_supp_hosp,df2)#normalement ce df a le mem nombre de lignes que les autres (1 par patient, 1 pour tous les patients)
+crh_var_supp_hosp=df3
+
+rm(df0,df1,df2,df3,keywords,exclusions)
+```
+
+###df_outcome final
+
+Prise en compte des outcomes deja présents aux urgences et des outcomes
+hospit optimises detectes juste avant
+
+```{r}
+names(crh_var_supp)
+df0=crh_var_supp%>%select(-texte_orientation,-texte_urg,-texte_conclusion)
+df1=left_join(df0,crh_var_supp_hosp)
+names(df1)
+df1 <- df1 %>% mutate(deces_service = deces_hospit & !deces_urg)
+df1 <- df1 %>% mutate(intubation_service = intubation_critique_hospit & !intubation_urg)
+df1 <- df1 %>% mutate(lata_service = lata_hospit & !lata_urg)
+df1 <- df1 %>% mutate(ACR_service = ACR_hospit & !ACR_urg)
+df2=df1%>%select(ID_SEJ,deces_service,intubation_service,lata_service,ACR_service)
+df_outcome_final=df2
+rm(df0,df1,df2)
+summary(df_outcome_final)
+
+####Sauvegarder  df_outcome_final
+on l'ajoutera dans l'analyse finale
+rm(list = setdiff(ls(), c("df_outcome_final")))
+
+```
+
+##Remplacer ancien df_outcome par df_outcome final et charger dataframes
+a analyser
+
+```{r}
+
+load("~/temp15.RData")#charge les df a analyser. verifier que tous les df ont le meme nb de patients
+load("~/df_outcome_final.RData")
+df_outcome=df_outcome_final
+df_outcome=df_outcome%>%map_dfr(replace_na,FALSE)#remplace NA par FALSE
+
+rm(df_outcome_final)
+```
+
+#Eliminer les variables redondantes et moins bien renseignées entre
+\*\_iono et \*\_nfs
+
+```{r}
+
+
+df1=df_final_imput
+df2=df_final
+
+# Extraire les noms des variables
+var_names <- names(df2)
+
+# Initialiser un vecteur pour stocker les noms de variables à éliminer
+vars_to_remove <- c()
+
+# Parcourir les noms de variables
+for (i in 1:length(var_names)) {
+  # Si le nom de variable se termine par "_nfs" ou "_iono", passer à la variable suivante
+  if (substr(var_names[i], nchar(var_names[i])-2, nchar(var_names[i])) %in% c("_nfs", "_iono")) {
+    next
+  }
+  # Sinon, chercher une variable ayant un nom identique mais avec un suffixe différent
+  else {
+    nfs_var <- paste0(substr(var_names[i], 1, nchar(var_names[i])-4), "_nfs")
+    iono_var <- paste0(substr(var_names[i], 1, nchar(var_names[i])-4), "_iono")
+    if (nfs_var %in% var_names & iono_var %in% var_names) {
+      # Comparer le nombre de valeurs manquantes pour chaque variable
+      nfs_missing <- sum(is.na(df2[, nfs_var]))
+      iono_missing <- sum(is.na(df2[, iono_var]))
+      if (nfs_missing > iono_missing) {
+        vars_to_remove <- c(vars_to_remove, nfs_var)
+      } else {
+        vars_to_remove <- c(vars_to_remove, iono_var)
+      }
+    }
+  }
+}
+
+# Eliminer les variables sélectionnées
+df3 <- df1[, !(names(df1) %in% vars_to_remove)]
+summary(df3)
+df_final_imput=df3
+
+df4 <- df2[, !(names(df2) %in% vars_to_remove)]
+df_final=df4
+summary(df4)
+df_final=df4
+rm(df0,df1,df2,df3,df4)
+```
+
+##Retrait de variables inutiles ou trop corrélées
+
+```{r}
+#A déterminer apres examen de varimp apres un 1er run du code
+df_final_imput=df_final_imput%>%select(-c("temps_urg_y","intubation_urg","creatinine_iono","ckd_epi_f_cre_._._62_iono","ckd_epi_f_cre_._62_iono","ckd_epi_m_cre_._80_iono","hematocrite_nfs","hemoglobine_nfs","hgt._mmol_l_","ly_iono.1","ly_nfs","mo_iono.1","mo_nfs","nt.50_iono","nt.75_iono","o2_._"))
+df_final=df_final%>%select(-c("temps_urg_y","intubation_urg","creatinine_iono","ckd_epi_f_cre_._._62_iono","ckd_epi_f_cre_._62_iono","ckd_epi_m_cre_._80_iono","hematocrite_nfs","hemoglobine_nfs","hgt._mmol_l_","ly_iono.1","ly_nfs","mo_iono.1","mo_nfs","nt.50_iono","nt.75_iono","o2_._"))
+
+```
+
+```{r}
+#nettoyer objets inutiles
+rm(list = setdiff(ls(), c("df_final","df_final_imput","df_outcome")))
+```
+
+#Reduction dimension du dataframe (regroupement par classes
+therapeutiques) ##reduction dimension ttt_habituels
+
+```{r}
+# Remplacer "data" par le nom de votre dataframe
+data <- df_final
+
+# Regrouper les variables en fonction des classes de médicaments
+data_reduced <- data %>%
+  mutate(
+    antihypertenseurs_ttt_hab = bisoce_ttt_hab + amlodipine_ttt_hab + perindopril_ttt_hab + ramipril_ttt_hab + atenolol_ttt_hab + bisoprolol_ttt_hab + nebivolol_ttt_hab +     lercanidipine_ttt_hab + ramipril_ttt_hab+ irbesartan_ttt_hab,amlor_ttt_hab ,
+    diuretiques_ttt_hab = furosemide_ttt_hab + esidrex_ttt_hab + lasilix_ttt_hab + spironolactone_ttt_hab,
+    antithrombotiques_ttt_hab = coumadine_ttt_hab + previscan_ttt_hab + clopidogrel_ttt_hab + xarelto_ttt_hab + eliquis_ttt_hab + lovenox_ttt_urg+ kardegic_ttt_hab ,
+    antiacides_ttt_hab = acide_ttt_hab + inexium_ttt_hab + esomeprazole_ttt_hab + lansoprazole_ttt_hab + pantoprazole_ttt_hab,
+    antidiabetiques_ttt_hab = metformine_ttt_hab + novorapid_ttt_hab,
+    hypolipémiants_ttt_hab=atorvastatine_ttt_hab+pravastatine_ttt_hab+simvastatine_ttt_hab+tahor_ttt_hab,
+    psychotropes_ttt_hab = alprazolam_ttt_hab + zopiclone_ttt_hab + seresta_ttt_hab + diazepam_ttt_urg + paroxetine_ttt_hab + mianserine_ttt_hab + escitalopram_ttt_hab,
+    antalgiques_ttt_hab = paracetamol_ttt_hab  + doliprane_ttt_hab+dafalgan_ttt_hab,
+    antiasthmatiques_ttt_hab=ventoline_ttt_hab,seretide_ttt_hab, 
+  )
+#conversion en var logique des var numeriques recodées
+data_reduced$antihypertenseurs_ttt_hab=as.logical(data_reduced$antihypertenseurs_ttt_hab)
+data_reduced$diuretiques_ttt_hab=as.logical(data_reduced$diuretiques_ttt_hab)
+data_reduced$antithrombotiques_ttt_hab=as.logical(data_reduced$antithrombotiques_ttt_hab)
+data_reduced$antiacides_ttt_hab=as.logical(data_reduced$antiacides_ttt_hab)
+data_reduced$antidiabetiques_ttt_hab=as.logical(data_reduced$antidiabetiques_ttt_hab)
+data_reduced$hypolipémiants_ttt_hab=as.logical(data_reduced$hypolipémiants_ttt_hab)
+data_reduced$psychotropes_ttt_hab=as.logical(data_reduced$psychotropes_ttt_hab)
+data_reduced$antalgiques_ttt_hab=as.logical(data_reduced$antalgiques_ttt_hab)
+data_reduced$antiasthmatiques_ttt_hab=as.logical(data_reduced$antiasthmatiques_ttt_hab)
+
+# Supprimer les variables originales des médicaments
+data_reduced1 <- data_reduced %>%select(-c(amlor_ttt_hab,ventoline_ttt_hab,seretide_ttt_hab,tahor_ttt_hab,bisoce_ttt_hab ,amlodipine_ttt_hab ,perindopril_ttt_hab ,ramipril_ttt_hab ,atenolol_ttt_hab ,bisoprolol_ttt_hab ,nebivolol_ttt_hab,   lercanidipine_ttt_hab ,ramipril_ttt_hab,irbesartan_ttt_hab ,
+    furosemide_ttt_hab ,esidrex_ttt_hab ,lasilix_ttt_hab ,spironolactone_ttt_hab,
+    coumadine_ttt_hab ,previscan_ttt_hab ,clopidogrel_ttt_hab ,xarelto_ttt_hab ,eliquis_ttt_hab ,lovenox_ttt_urg,kardegic_ttt_hab ,
+    acide_ttt_hab ,inexium_ttt_hab ,esomeprazole_ttt_hab ,lansoprazole_ttt_hab ,pantoprazole_ttt_hab,
+    metformine_ttt_hab ,novorapid_ttt_hab,
+    alprazolam_ttt_hab ,zopiclone_ttt_hab ,seresta_ttt_hab ,diazepam_ttt_urg ,paroxetine_ttt_hab ,mianserine_ttt_hab ,escitalopram_ttt_hab,
+    paracetamol_ttt_hab  ,doliprane_ttt_hab,atorvastatine_ttt_hab,pravastatine_ttt_hab,dafalgan_ttt_hab,simvastatine_ttt_hab))
+  
+```
+
+##Reduction dimension ttt_urgences
+
+```{r}
+data2 <- data_reduced1
+
+# Regrouper les variables en fonction des classes de médicaments
+data_reduced2 <- data2 %>%
+  mutate(
+    antalgiques_pal_1_2_ttt_urg = paracetamol_ttt_urg+acupan_ttt_urg+nefopam_ttt_urg+doliprane_ttt_urg+orozamudol_ttt_urg+spasfon_ttt_urg,
+    antalgiques_pal_3_ttt_urg = oxynormoro_ttt_urg+morphine_ttt_urg,
+    antihypertenseurs_ttt_urg= bisoce_ttt_urg+bisoprolol_ttt_urg+ramipril_ttt_urg+amlodipine_ttt_urg,
+    diuretiques_ttt_urg=furosemide_ttt_urg+lasilix_ttt_urg,
+    antithrombotiques_ttt_urg= kardegic_ttt_urg+eliquis_ttt_urg,
+    antidiabetiques_ttt_urg= metformine_ttt_urg+atorvastatine_ttt_urg+glycemie_ttt_urg,
+    psychotropes_ttt_urg= alprazolam_ttt_urg+seresta_ttt_urg,
+    antibiotique_ttt_urg= amox_ac_ttt_urg+ceftriaxone_ttt_urg+metronidazole_ttt_urg+cefotaxime_ttt_urg+amox_ac_ttt_urg.1,
+    antiacides_ttt_urg= esomeprazole_ttt_urg+lansoprazole_ttt_urg+pantoprazole_ttt_urg
+   )
+
+# Supprimer les variables originales des médicaments
+data_reduced3 <- data_reduced2 %>%select(-c( paracetamol_ttt_urg,acupan_ttt_urg,nefopam_ttt_urg,doliprane_ttt_urg,orozamudol_ttt_urg,spasfon_ttt_urg,oxynormoro_ttt_urg,morphine_ttt_urg, bisoce_ttt_urg,bisoprolol_ttt_urg,ramipril_ttt_urg,amlodipine_ttt_urg,furosemide_ttt_urg,lasilix_ttt_urg,kardegic_ttt_urg,eliquis_ttt_urg, metformine_ttt_urg,atorvastatine_ttt_urg,glycemie_ttt_urg,alprazolam_ttt_urg,seresta_ttt_urg, amox_ac_ttt_urg,ceftriaxone_ttt_urg,metronidazole_ttt_urg,cefotaxime_ttt_urg,amox_ac_ttt_urg.1,esomeprazole_ttt_urg,lansoprazole_ttt_urg,pantoprazole_ttt_urg))
+
+#conversion en logique des var numeriques nouvellement crées
+data_reduced3$antalgiques_pal_1_2_ttt_urg=as.logical(data_reduced3$antalgiques_pal_1_2_ttt_urg)
+data_reduced3$antalgiques_pal_3_ttt_urg=as.logical(data_reduced3$antalgiques_pal_3_ttt_urg)
+data_reduced3$antihypertenseurs_ttt_urg=as.logical(data_reduced3$antihypertenseurs_ttt_urg)
+data_reduced3$diuretiques_ttt_urg=as.logical(data_reduced3$diuretiques_ttt_urg)
+data_reduced3$antithrombotiques_ttt_urg=as.logical(data_reduced3$antithrombotiques_ttt_urg)
+data_reduced3$antidiabetiques_ttt_urg=as.logical(data_reduced3$antidiabetiques_ttt_urg)
+data_reduced3$psychotropes_ttt_urg=as.logical(data_reduced3$psychotropes_ttt_urg)
+data_reduced3$antibiotique_ttt_urg=as.logical(data_reduced3$antibiotique_ttt_urg)
+data_reduced3$antiacides_ttt_urg=as.logical(data_reduced3$antiacides_ttt_urg)
+
+```
+
+##remplacement de df_final
+
+```{r}
+df_final=data_reduced3
+rm(data_reduced,data_reduced1,data_reduced2,data_reduced3,data,data2)
+rm(df_final_imput)
+```
+
+#MODELISATION faite avec exploring tidymodels (kaggle) et le package
+"probably" de max kuhn
+
+#Activation packages
+
+```{r,echo=FALSE}
+ library(stringr)
+library(missForest)
+library(ROSE)
+library(recipes, lib.loc = "/usr/share/R/library")
+library(yardstick)  
+library(forcats)
+library(broom)
+library(tune)
+library(PRROC)
+library(pROC)
+library(ROCR)
+
+
+library(ranger)
+library(yardstick)
+library(glmnet)
+library(vip)
+library(readr)
+library(tidymodels)
+library(tidyr)
+library(janitor)
+library(lubridate)
+library(dplyr)
+library(plyr)
+library(dbplyr)
+library(skimr) 
+library(infer) 
+library(extracthop)
+library(xml2)
+library(rvest)
+library(selectr)
+library(purrr)
+library(stringi)
+library(rlang)
+library(cli)
+library(fansi)
+library(vctrs)
+library(jsonlite)
+library(tidyselect)
+library(remotes)
+library(ellipsis)
+library(stringr)
+library(expss)
+library(htmlwidgets)
+library(frequency)
+library(plyr)
+library(gtsummary)
+library(broom)
+library(ggplot2)
+library(mice)
+library(missForest)
+library(forestmodel)
+library(pROC)
+library(randomForest)
+library(ROCR)
+library(neuralnet)
+library(tidymodels) # Predictive Framework
+library(caret) # Predictive Framework
+
+# Modelling AlgorithmsS
+library(glmnet) # Glmnet regression
+library(ranger) # Random Forests
+
+# Formating, Visualisations and tables
+library(scales) # Number formats
+library(knitr) # Table
+library(gridExtra) # multiplot
+library(e1071) # Summary distribution
+library(skimr) # Summarise dataframe
+library(corrplot) # Correlation plot
+#install.packages("probably")
+library(probably) # Probability thresholds
+
+# Data handling Packages
+library(tidyverse) # Data handling/ Graphics
+library(data.table) # Data handling
+library(rsample)
+```
+
+#Nombre et noms des outcomes
+
+```{r}
+#Convertir en binaire df_outcome
+df123=df_outcome%>%select(-ID_SEJ)%>%mutate_all(~as.logical(.))
+df123$ID_SEJ=df_outcome$ID_SEJ
+df_outcome=df123
+rm(df123)
+test=select_if(df_outcome,is_logical)
+rm(test)
+df_outcome=df_outcome%>%select(ID_SEJ,everything())#placer ID_SEJ en tant que 1ere var du df
+
+noms_outcomes=names(df_outcome)
+nombre_outcomes=as.numeric(ncol(df_outcome))
+o=2#1er outcome
+```
+
+##derniers ajustements du dataframe
+
+```{r}
+
+#remplacer valeurs infinies par manquantes
+df_final1 <- df_final %>% mutate(across(everything(), ~replace(., is.infinite(.) | is.nan(.), NA)))
+
+#retirer variables ayant une plage de valeurs nulle (bugge l'implémentation)
+ranges <- sapply(df_final1, function(x) {
+  if (is.factor(x)) {
+    nlevels(x) <= 1
+  } else {
+    max(x, na.rm = TRUE) - min(x, na.rm = TRUE) == 0
+  }
+})
+
+zero_range_vars <- names(ranges[ranges == TRUE])
+df_final2=df_final1%>%select(-zero_range_vars)
+df_final=df_final2
+rm(df_final1,df_final2,zero_range_vars)
+
+```
+
+#Parametres de modelisation 1 (rapidité de calcul, performances faibles)
+
+```{r}
+model_folds=3#nombre de plis dans cross validation 
+model_train_tree=c(20,30)#nb d'arbre d'entraienement 
+model_train_mtry=c(1,3)
+model_train_size=3
+model_precision_choisie_pour_tuning=0.999#c'est la valeur de precision minimale acceptable pour déterminer le seuil (thershold tuning) lors de la cross validation. si on prends une valeur trop faible on va perdre en sensibilité dans le modele final, a faire varier pour obtenir un bon comprimis sur le modele final entre precision et recall
+
+#Parametres imputation 
+model_maxiter=1#nb d'iterations de missforest
+model_missforest_tree=3#nombres d'atbres dans missforest
+model_missforest_mtry=floor(sqrt(ncol(df_final))/4)#ici je divise par 4 pour gagner le temps de calcul(mettre 1 dans run final)
+```
+
+#Parametres de modelisation 2: (intermédiaires)
+
+```{r}
+model_folds=5#nombre de plis dans cross validation (10 dans final)
+model_train_tree=c(100,500)#nb d'arbre d'entraienement entre 5 et 10 dans le tuning , c(500,1500)  dans final
+model_train_mtry=c(1,10)#c(1-22 dans final)
+model_train_size=6#c(30 dans final)
+model_precision_choisie_pour_tuning=0.999#c'est la valeur de precision minimale acceptable pour déterminer le seuil (thershold tuning) lors de la cross validation. si on prends une valeur trop faible on va perdre en sensibilité en sensibilité dans le modele final, a faire varier pour obtenir un bon comprimis sur le modele final entre precision et recall
+
+
+#Parametres imputation 
+model_maxiter=1#20 dans final. nb d'iterations de missforest
+model_missforest_tree=15#100 dans final.nombres d'atbres dans missforest
+model_missforest_mtry=floor(sqrt(ncol(df_final))/2)#ici je divise par 4 pour gagner le temps de calcul(mettre 1 dans run final)
+```
+
+#Parametres de modelisation 3: (performance elevées, temps calcul
+eleves)
+
+```{r}
+model_folds=10#nombre de plis dans cross validation (10 dans final)
+model_train_tree=c(500,1500)#nb d'arbre d'entraienement entre 5 et 10 dans le tuning , c(500,1500)  dans final
+model_train_mtry=c(1,22)#c(1-22 dans final)
+model_train_size=30#c(30 dans final)
+model_precision_choisie_pour_tuning=0.99#c'est la valeur de precision minimale acceptable pour déterminer le seuil (thershold tuning) lors de la cross validation. si on prends une valeur trop faible on va perdre en sensibilité en sensibilité dans le modele final, a faire varier pour obtenir un bon comprimis sur le modele final entre precision et recall
+
+
+#Parametres imputation 
+model_maxiter=1#20 dans final. nb d'iterations de missforest
+model_missforest_tree=50#100 dans final.nombres d'atbres dans missforest
+model_missforest_mtry=floor(sqrt(ncol(df_final))/1)#ici je divise par 4 pour gagner le temps de calcul(mettre 1 dans run final)
+```
+
+#CHOIX DE L OUTCOME A choisir dans la variable "noms_outcome"
+
+```{r}
+o=2
+```
+
+#Creation des dataframes Etapes -créer un dataframe comprenant l'outcome
+-le separer en train et test -implémenter train et test séparément avec
+missforest -equilibrer les classes sur l'outcome dans train avec ROSE
+
+```{r}
+
+set.seed(123)
+    ##Creation df_total comprenant l'outcome
+    nom_outcome=noms_outcomes[o]
+    
+    df1=df_outcome%>% select(ID_SEJ,nom_outcome)
+    names(df1)=c("ID_SEJ","outcome")#on renomme la colonne de l'outcome
+    df_total=left_join(df1,df_final,by="ID_SEJ")#df  utilisé pour modelisation
+    df_total$outcome=as.factor(df_total$outcome)
+    rm(df1)
+
+#Split 1 (df_train+df_test)
+    
+  ##Split1:creation df_train (entrainement) et df_test (evaluation)
+  splits= initial_split(df_total, prop=8/10, strata = outcome)#stratifie le split outcome
+  df_train=training(splits)
+  df_test=testing(splits)
+  
+#Imputation df_train
+ 
+  #Séparer var numerique et binaires 
+  df_train_num=select_if(df_train,is.numeric)
+  df_train_bin=select_if(df_train,is_logical)
+  df_train_bin$ID_SEJ=df_train$ID_SEJ
+  df_train_bin=df_train_bin%>% replace(is.na(.), FALSE)
+  
+  #imputation var binaires
+  df0=df_train_bin
+  df0=sapply(df0,as.numeric)
+  df0=as.data.frame(df0)
+
+  df1=missForest(df0, maxiter = model_maxiter, ntree = model_missforest_tree, variablewise = FALSE,decreasing = FALSE, verbose = FALSE,mtry = model_missforest_mtry, replace = TRUE,classwt = NULL, cutoff = NULL, strata = NULL,sampsize = NULL, xtrue = NA)
+  df2=data.frame(df1[1])
+  df_train_bin_imput=df2
+  names=names(df_train_bin_imput)
+  names=str_replace(names, "ximp.", "")#on enleve les suffixes ximp. rajoutés lors de l'implémentation
+  names(df_train_bin_imput)=names
+
+  ID_SEJ=df_train$ID_SEJ
+  df0=select(df_train_bin_imput,-c("ID_SEJ"))
+  df1=apply(df0, 2, as.logical)##remplacer les 0 et 1 par true et false
+  df2=data.frame(ID_SEJ,df1)
+  df_train_bin_imput=df2
+  rm(df0, df1 , df2, ID_SEJ, names)
+  
+  #imputation var numeriques
+  df0=df_train_num
+  df0=as.data.frame(df0)
+  df1=missForest(df0, maxiter = model_maxiter , ntree = model_missforest_tree , variablewise = FALSE,decreasing = FALSE, verbose = FALSE,mtry = model_missforest_mtry, replace = TRUE,classwt = NULL, cutoff = NULL, strata = NULL,sampsize = NULL,xtrue = NA) 
+  df2=data.frame(df1[1])
+  df_train_num_imput=df2
+  names=names(df_train_num_imput)#on enleve les suffixes ximp. rajoutés lors de l'implémentation
+  names=str_replace(names, "ximp.", "")#remplace les suffixes et prefixes dans les noms
+  names(df_train_num_imput)=names
+  rm(df0, df1, df2, names)
+  
+  #jointure des df num et bin imputés 
+  df1=left_join(df_train_bin_imput,df_train_num_imput, by="ID_SEJ")
+  df_train_imput=df1
+  df_out=df_train%>% select(ID_SEJ,outcome)
+  df_out1=left_join(df_out,df_train_imput)
+  df_train_imput=df_out1
+  rm(df_out1,df_out,df1,df_train_bin,df_train_bin_imput,df_train_num,df_train_num_imput)
+  df_train_imput$outcome=as.logical(df_train_imput$outcome)
+  is.logical(df_train_imput$outcome)
+
+  ##Remplacement de df_train par df_train_imput
+  df_train=df_train_imput
+  rm(df_train_imput)
+
+#Imputation df_test
+  
+  #Séparer var numerique et binaires 
+  df_test_num=select_if(df_test,is.numeric)
+  df_test_bin=select_if(df_test,is_logical)
+  df_test_bin$ID_SEJ=df_test$ID_SEJ
+  df_test_bin=df_test_bin%>% replace(is.na(.), FALSE)
+  df0=df_test_bin
+  df0=sapply(df0,as.numeric)
+  df0=as.data.frame(df0)
+  df1=missForest(df0, maxiter = model_maxiter, ntree = model_missforest_tree, variablewise = FALSE,decreasing = FALSE, verbose = FALSE,mtry = model_missforest_mtry, replace = TRUE,classwt = NULL, cutoff = NULL, strata = NULL,sampsize = NULL, xtrue = NA)
+  df2=data.frame(df1[1])
+  df_test_bin_imput=df2
+  names=names(df_test_bin_imput)
+  names=str_replace(names, "ximp.", "")
+  names(df_test_bin_imput)=names
+  
+  ID_SEJ=df_test$ID_SEJ
+  df0=select(df_test_bin_imput,-c("ID_SEJ"))
+  df1=apply(df0, 2, as.logical)
+  df2=data.frame(ID_SEJ,df1)
+  df_test_bin_imput=df2
+  rm(df0, df1 , df2, ID_SEJ, names)
+  
+  
+  #imputation données numeriques
+  df0=df_test_num
+  df0=as.data.frame(df0)
+  df1=missForest(df0, maxiter = model_maxiter , ntree = model_missforest_tree , variablewise = FALSE,decreasing = FALSE, verbose = FALSE,mtry = model_missforest_mtry, replace = TRUE,classwt = NULL, cutoff = NULL, strata = NULL,sampsize = NULL,xtrue = NA)
+  df2=data.frame(df1[1])
+  df_test_num_imput=df2
+  names=names(df_test_num_imput)#on enleve les suffixes ximp. rajoutés lors de l'implémentation
+  names=str_replace(names, "ximp.", "")#remplace les suffixes et prefixes dans les noms
+  names(df_test_num_imput)=names
+  rm(df0, df1, df2, names)
+  
+  #jointure des df num et bin imputés 
+  df1=left_join(df_test_bin_imput,df_test_num_imput, by="ID_SEJ")
+  df_test_imput=df1
+  
+  df_out=df_test%>% select(ID_SEJ,outcome)
+  df_out1=left_join(df_out,df_test_imput)
+  df_test_imput=df_out1
+  rm(df_out1,df_out,df1,df_test_bin,df_test_bin_imput,df_test_num,df_test_num_imput)
+  df_test_imput$outcome=as.logical(df_test_imput$outcome)
+  is.logical(df_test_imput$outcome)
+  
+  #Remplacement de df_test par imputé
+  df_test=df_test_imput
+  rm(df_test_imput)
+
+#Remplacement de splits par split imputé 
+  df0=df_train
+  df1=df_test
+  df1$outcome=as.factor(df1$outcome)
+  df0$outcome=as.factor(df0$outcome)
+  df3=full_join(df0,df1)  
+  
+  splits1=splits
+  splits1$data=df3
+  splits=splits1
+  rm(df0,df1,df3,splits1)
+  print(c("imputation faite pour :",nom_outcome))
+
+#Equilibration de classes sur l'outcome (resampling) dans df_train uniquement (df test n'est pas réequilibré)
+  library(ROSE)
+
+  #Conversion des var binaires("logical") en categorielles ("factor")
+    #detection var binaires
+    binary_vars <- c()# Créer un vecteur vide pour stocker les noms des variables binaires
+    df0=df_train
+    for (col in names(df0)) {
+      # Vérifier si la colonne a uniquement deux valeurs uniques
+      if (length(unique(df0[[col]])) == 2) {
+        binary_vars <- c(binary_vars, col)  # Ajouter le nom de la variable binaire au vecteur
+      }
+    }
+    
+    # Convertir  
+    for (var in binary_vars) {
+      df0[[var]] <- as.factor(df0[[var]])
+    }
+  
+  #equilibration des classes dans df_train
+  df1=ROSE(outcome~ .,data=df0,N=nrow(df0))$data
+
+  table(df1$outcome)
+  table(df_train$outcome)
+  df_train=df1
+  rm(df0,df1)
+  
+  df0=df_train
+  for (col in names(df0)) {
+    if (is.factor(df0[[col]])) {
+      if (length(levels(df0[[col]])) == 2) {
+        df0[[col]] <- as.logical(as.integer(df0[[col]]) - 1)  
+      }
+    }
+  }
+  
+  df_train=df0
+  rm(df0)
+  df_train$outcome=as.factor(df_train$outcome)
+
+
+```
+
+#Pre processing
+
+-recipes: This allows us to determine what preprocessing we wish to
+apply to our data -prep: Estimates the parameters associated with the
+chosen recipe -bake: Applies the actual two steps above
+
+-Remove variables from feature selection -Covert nomial variables to
+dummy variables -Centre and scale all numerical variables -Remove highly
+correlated variables -Remove variables with no variance -Remove
+variables with minimal variance
+
+Once the recipes have been created, the bake function is used to apply
+the transformations to the training and testing set and ultimately
+replace the old dataframes.
+
+```{r}
+# Preprocessing 
+recipe =
+  df_train %>%
+    recipe(outcome ~ .) %>%
+    step_normalize(all_numeric()) %>%#normalise et recentre var num
+    step_corr(all_numeric(), -all_outcomes(), threshold = 0.9) %>%#retire var num trop corrélées
+    step_zv(all_predictors()) %>%#enleve var avec zero variance (zv=zero variance)
+    step_nzv(all_predictors()) %>%#enleve var avec variance minime (nzv=near zero variance)
+    prep()
+
+# Apply processing to test and training data
+df_baked_train <- recipe %>% bake(df_train) # Preprocessed training
+df_baked_test <- recipe %>% bake(df_test) # Preprocessed testing
+
+```
+
+#Cross validation (sampling)
+
+```{r}
+library(rsample)
+l_cv <- vfold_cv(df_baked_train, v = model_folds, strata = "outcome") 
+```
+
+#Random forest This model has hyperparameter and the tidymodel packages
+will be used to aid in tuning.
+
+The steps in the build are:
+
+-Create a model object, setting the hyperparameters to tune and setting
+the engine to ranger. This means using the implementation of random
+forest from package ranger -Secondly, the grid_random function is used
+to generate 50 random combinations of parameters mtry, trees and min_n.
+mtry requires an upper bound to be set, which in this case is set at the
+number of predictors -The best parameters are stored and applied in the
+cross validation as done in the previous step -The output is stored in a
+list for later use
+
+```{r}
+library(parsnip)
+
+set.seed(123)
+detach("package:caret", unload = TRUE)
+detach("package:recipes", unload = TRUE)
+library(recipes)
+library(ipred)
+library(tune)
+library(parsnip)
+library(dials)
+library(workflows)
+library(lubridate)
+library(tune)
+
+# Définir le modèle
+mod <- rand_forest(trees = tune(), mtry = tune(), min_n = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+
+# Créer le workflow
+wf <- workflow() %>% 
+  add_model(mod) %>% 
+  add_formula(outcome ~ .)
+
+# Build initial model with varying parameters and cross validation
+set.seed(123)
+
+mod_results_tbl <- 
+  tune_grid(wf,
+    formula   = outcome ~ .,
+    model     = mod,
+    resamples = l_cv,
+    grid      = grid_random(parameters(mtry(model_train_mtry), 
+                                       trees(range = model_train_tree), 
+                                       min_n()), 
+                            size = model_train_size),
+    metrics   = metric_set(roc_auc),
+    control   = control_grid()
+  )
+
+
+# Store the parameters
+df_parameter <- mod_results_tbl %>% select_best("roc_auc")
+glimpse(df_parameter)
+
+library(purrr)
+library(rsample)
+
+# random forest - n fold CV
+mod_rf <-
+  list(parameters = df_parameter,
+       df = map2_df(.x = l_cv$splits,
+                    .y = l_cv$id,
+                    function (split = .x, fold = .y)
+                     {
+                       # Split the data into analysis and assessment tables
+                       df_analysis <- analysis(split)
+                       df_assessment <- assessment(split)
+  
+                       # Build the model
+                       mod_2 <-
+                        rand_forest(mode = "classification",
+                                     mtry = as.numeric(df_parameter["mtry"]),
+                                     trees = as.numeric(df_parameter["trees"]),
+                                     min_n = as.numeric(df_parameter["min_n"])
+                                     ) %>%
+                         set_engine("ranger") %>%
+                         fit(outcome ~ ., data = df_analysis)
+  
+                       # Summarise Predictions
+                       table <-
+                         tibble(fold = fold,
+                                truth = df_assessment$outcome,
+                                .pred_TRUE = #INVERSION DE TRUE ET FALSE JE SAIS PAS POURQUOI DANS MON MODELE...
+                                    predict(mod_2,
+                                            new_data = df_assessment,
+                                            type = "prob")[[".pred_FALSE"]],#INVERSION DE TRUE ET FALSE JE SAIS PAS POURQUOI DANS MON MODELE...
+                                .pred_FALSE = 
+                                    predict(mod_2,
+                                            new_data = df_assessment,
+                                            type = "prob")[[".pred_TRUE"]],
+                                .pred_Class = 
+                                    predict(mod_2, new_data = df_assessment) %>%
+                                  unlist() %>%
+                                  as.character()
+                                ) %>%
+                         mutate(.pred_Class = factor(.pred_Class))
+                        })
+          )
+
+```
+
+#Evaluation du modele(metrics)
+
+```{r}
+#boucle des metrics pour chaque fold 
+library(probably)
+library(ggplot2)
+library(maditr)
+
+mod_summary_all =bind_rows(mod_rf[["df"]] %>% mutate(model = "randomforest"))
+
+n=1
+t=0.5
+
+df_pred_base =
+  mod_summary_all %>%
+    filter(model == "randomforest") %>%
+    select(fold, truth, .pred_TRUE)
+
+noms_folds=unique(df_pred_base$fold)#nom de tous les  folds
+
+df_tuning=tibble()#dataframe implémenté par la boucle
+for (n in 1:model_folds){
+  nom_fold=noms_folds[n]
+  
+ for (t in seq(0, 1, by=0.01)) {#boucle de threshold "t" qui s'incrémente par 0.01
+  
+        #AVP VN FP FN pour threshold=t
+      df0 <-
+        mod_summary_all %>%#toutes les données de prediction sont dans ce df
+        filter(model == "randomforest") %>%
+        select(fold, truth, .pred_TRUE) %>%#selectionne les variables
+        mutate(pred_class=as.factor(ifelse(.pred_TRUE<t,TRUE,FALSE)))%>%#fait la prediction binaire en fonction du seuil t de la boucle (donc pour tous les seuils)
+        mutate(VP=ifelse(as.character(pred_class)=="TRUE"  & as.character(truth)=="TRUE",TRUE,FALSE ))%>%
+        mutate(VN=ifelse(as.character(pred_class)=="FALSE"  & as.character(truth)=="FALSE",TRUE,FALSE ))%>%
+        mutate(FP=ifelse(as.character(pred_class)=="TRUE"  & as.character(truth)=="FALSE",TRUE,FALSE ))%>%
+        mutate(FN=ifelse(as.character(pred_class)=="FALSE"  & as.character(truth)=="TRUE",TRUE,FALSE ))
+        
+     #filtrer les lignes correpondant au fold en cours d'analyse
+     df1=df0%>%filter(fold==nom_fold) 
+        
+        #compter VP VN FP VP
+      VP <- as.numeric(sum(df1$VP, na.rm = TRUE))
+      VN <- as.numeric(sum(df1$VN, na.rm = TRUE))
+      FP <- as.numeric(sum(df1$FP, na.rm = TRUE))
+      FN <- as.numeric(sum(df1$FN, na.rm = TRUE))
+      
+      #Calcul des metrics
+      sensibilite=VP/(VP+FN)
+      specificite=VN/(FP+VN)
+      
+      youden_index=sensibilite+specificite-1#Youdens's J stat (=youden index)=sens+spe-1
+      
+      precision=VP/(VP+FP)
+      rappel=VP/(VP+FN)
+ 
+      df_tuning_loop=tibble(fold=nom_fold,seuil=t,VP=VP,FP=FP,VN=VN,FN=FN,sensibilite=sensibilite,specificite=specificite,youden_index,precision=precision,rappel=rappel)
+      df_tuning=bind_rows(df_tuning,df_tuning_loop)
+    }
+}
+
+
+
+
+```
+
+##pr_auc pour chaque fold pour chaque seuil
+
+```{r}
+
+ n=1
+ t=0.5
+ df_pr_auc=tibble()
+
+     for (n in 1:model_folds){
+       nom_fold=noms_folds[n]
+
+          for (t in seq(0, 1, by=0.01)) {#boucle de threshold "t" qui s'incrémente par 0.01
+
+           df_prediction <-
+           mod_summary_all %>%
+             filter(model == "randomforest") %>%
+             select(fold, truth, .pred_TRUE)
+
+           nom_fold=noms_folds[n]
+
+           df0=df_prediction
+           df1=df0%>%filter(fold==nom_fold) 
+            df2=df1%>%mutate(pred_class=as.factor(ifelse(.pred_TRUE>t,TRUE,FALSE)))
+
+           pr_auc=pr_auc(df2,truth,.pred_TRUE)
+           pr_auc=pr_auc$.estimate[1]
+           pr_auc=as.numeric(pr_auc)
+           df_pr_auc_loop=tibble(fold=nom_fold,threshold=t,pr_auc=pr_auc)
+           df_pr_auc=bind_rows(df_pr_auc,df_pr_auc_loop)
+
+             }
+         }
+
+
+   n=1
+   df_meilleur_seuil=tibble()
+   df0=df_pr_auc
+
+       for (n in 1:model_folds){
+         nom_fold=noms_folds[n]
+         t_optimal=df0 %>% filter(threshold != 0) %>% slice_max(pr_auc)
+         seuil_optimal= t_optimal$threshold[1]
+         pr_auc_optimal=t_optimal$pr_auc[1]
+         df_meilleur_seuil_loop=tibble(fold=nom_fold,meilleur_threshold=seuil_optimal,pr_auc=pr_auc_optimal)
+         df_meilleur_seuil=bind_rows(df_meilleur_seuil,df_meilleur_seuil_loop)
+       }
+
+```
+
+##Jonction des tableaux similaire de PR_AUC et de df_tuning
+
+```{r}
+df0=bind_cols(df_tuning,df_pr_auc)
+df0 <- df0 %>%select_if(~n_distinct(.) > 1)
+df0 <- df0[, !duplicated(as.list(df0))]
+names(df0) <- gsub("\\.\\.\\.1", "", names(df0))
+tableau_metrics_folds_threshold=df0
+   
+```
+
+##déterminer le meilleur threshold
+
+```{r}
+summary(tableau_metrics_folds_threshold)
+glimpse(tableau_metrics_folds_threshold)
+library(dplyr)
+
+# AJUSTEMENT SUR J INDEX
+tableau_metrics_filtered <- tableau_metrics_folds_threshold %>%
+filter(precision >= model_precision_choisie_pour_tuning)
+best_thresholds <- tableau_metrics_filtered %>%
+ group_by(fold) %>%
+ top_n(1, youden_index)
+print(best_thresholds)
+best_threshold=mean(best_thresholds$seuil)
+
+```
+
+# Prediction Evaluation
+
+The final stage of this analysis is to use the models built and tuned on
+the training data and see how well they perform on the unseen test data.
+All three models will be used to predict death in the testing dataset.
+
+##Modele final
+
+```{r warning = FALSE, message = FALSE}
+
+# Final random forest
+mod_final_rf <-
+ rand_forest(mode = "classification",
+             mtry = mod_rf[["parameters"]][["mtry"]],
+             trees = mod_rf[["parameters"]][["trees"]],
+             min_n = mod_rf[["parameters"]][["min_n"]]
+             ) %>%
+  set_engine("ranger", importance="impurity") %>%#j'ai ajouté de garder l'importance des variables
+  fit(outcome ~ ., df_baked_test)
+```
+
+#Importance des variables
+
+```{r}
+library(vip)
+library(ranger)
+# Extraire l'importance des variables
+importance_vector <- ranger::importance(mod_final_rf$fit)
+
+# Convertir le vecteur d'importance en data.frame
+df_var_imp <- data.frame(variable = names(importance_vector), importance = importance_vector)
+
+# Normaliser les valeurs d'importance entre 0 et 100
+df_var_imp$importance <- round((df_var_imp$importance - min(df_var_imp$importance)) / 
+                                  (max(df_var_imp$importance) - min(df_var_imp$importance)) * 100)
+# Classer l'importance par ordre décroissant
+df_var_imp <- df_var_imp[order(-df_var_imp$importance), ]
+
+
+```
+
+The table below shows the performance of the model on the test data:
+
+```{r echo = FALSE, warning = FALSE, message = FALSE}
+
+# Summary of prediction performance
+bind_rows(
+          predict(mod_final_rf, new_data = df_baked_test, type = "prob") %>%
+            bind_cols(predict(mod_final_rf, new_data = df_baked_test)) %>%
+            bind_cols(df_baked_test) %>%
+            metrics(outcome, .pred_FALSE, estimate = .pred_class) %>%
+            mutate(model = "randomforest")
+          ) %>%
+ filter(.metric %in% c("accuracy", "roc_auc")) %>%
+  spread(.metric, .estimate) %>%
+  select(-.estimator) %>%
+  kable(align = c('c', 'c', 'c'))
+```
+
+#Metrics finales des predicions du dernier modele sur df_test avec seuil
+optimal
+
+```{r}
+
+#predicions du modele final sur test avec seuil optimal
+
+#metrics finales 
+##Predictions  par le dernier modele sur df_test
+predic_dernier_modele=predict(mod_final_rf, new_data = df_baked_test, type = "prob") %>%
+  bind_cols(predict(mod_final_rf, new_data = df_baked_test)) %>%
+  bind_cols(df_baked_test)%>%select(outcome,.pred_TRUE,.pred_FALSE,.pred_class)
+
+# Ajouter une colonne pour la classe prédite avec le seuil optimal 
+##le seuil optimal est déterminé sur les folds par moyenne des meilleurs seuils  sur chaque fold
+predic_dernier_modele <- predic_dernier_modele %>%
+  mutate(.pred_class = ifelse(.pred_TRUE > best_threshold, TRUE, FALSE))
+predic_dernier_modele$.pred_class=as_factor(predic_dernier_modele$.pred_class)
+
+final_precision=precision(predic_dernier_modele,truth=outcome,estimate =.pred_class)
+final_precision=final_precision$.estimate
+final_recall=recall(predic_dernier_modele,truth=outcome,estimate =.pred_class)
+final_recall=final_recall$.estimate
+final_confusion_matrix=conf_mat(predic_dernier_modele,truth=outcome,estimate =.pred_class)
+print(final_confusion_matrix[["table"]])
+
+#TP,TN,FP,FN
+TN=final_confusion_matrix[["table"]][1,1]
+FP=final_confusion_matrix[["table"]][2,1]
+TP=final_confusion_matrix[["table"]][2,2]
+FN=final_confusion_matrix[["table"]][1,2]
+
+#Metrics CALCULES d'apres confuson matrix
+final_sensitivity_calc=TP/(TP+FN)
+final_specificity_calc=TN/(FP+TN)
+final_youden_index_calc=final_sensitivity_calc+final_specificity_calc-1
+final_precision_calc=TP/(TP+FP)
+final_recall_calc=TP/(TP+FN)
+
+
+#Metrix EXTRAITS avec package  yardstick
+final_sensitivity=sensitivity(predic_dernier_modele,truth=outcome,estimate =.pred_class)
+final_sensitivity=as.numeric(final_sensitivity[1,3])
+final_specificity=specificity(predic_dernier_modele,truth=outcome,estimate =.pred_class)
+final_specificity=as.numeric(final_specificity[1,3])
+
+#pr_AUC
+library(PRROC)
+pr_curve <- pr.curve(scores.class0 = predic_dernier_modele$.pred_TRUE, 
+                     weights.class0 = predic_dernier_modele$outcome == "TRUE")
+final_pr_auc=pr_curve$auc.integral 
+
+#ROC_AUC
+library(pROC)
+roc_curve <- roc(response = predic_dernier_modele$outcome, predictor = predic_dernier_modele$.pred_TRUE, levels = rev(levels(predic_dernier_modele$outcome)))
+
+final_roc_auc=as.numeric(auc(roc_curve))
+
+#hyperparametres
+final_mtry=mod_rf[["parameters"]][["mtry"]]
+final_tree=mod_rf[["parameters"]][["trees"]]
+final_min_n=mod_rf[["parameters"]][["min_n"]]
+
+```
+
+#Tableau metrics final
+
+```{r}
+#tableau metrics finales
+final_tableau_metrics=tibble(nom_outcome=nom_outcome
+                             ,TP=TP
+                             ,FP=FP
+                             ,FN=FN
+                             ,TN=TN
+                             ,ROC_AUC=final_roc_auc
+                             ,PR_AUC=final_pr_auc
+                             #,precision=final_precision
+                             , precision_calc=final_precision_calc
+                             #,recall=final_recall
+                             ,recall_calc=final_recall_calc
+                             #,sensitivity=final_sensitivity
+                             ,sensibilite_calc=final_sensitivity_calc
+                             #,spec=final_specificity
+                             ,spec_calc=final_specificity_calc
+                             ,youden_index=final_youden_index_calc
+                             , threshold=best_threshold
+                             , mtry=final_mtry,trees=final_tree
+                             ,min_n_node=final_min_n
+                             )
+
+
+```
+
+#courbes ROC
+
+```{r}
+summary(roc_curve)
+glimpse(roc_curve)
+plot(roc_curve,, xlab = "1 - Specificity", ylab = "Sensitivity")
+```
+
+The last stage of this analysis is to compare the predictions from the
+random forest model with the standard threshold of 50 percent and the
+calculated threshold of 21 percent. These results can be seen in the
+table below and as expected the sensitivity has increased dramatically
+and the specificity has reduced marginally. The expecation was that the
+two metrics would have been similar, the fact that they are not may
+indicate some bias between our testing and training data.
+
+The final step which will not be completed here is that the random
+forest model is re-built on the entire dataset.
+
+#Exporter fichiers csvmodelisation
+
+```{r}
+
+outcomes=summary(df_outcome)#denombre les outcomes
+write.csv(outcomes,file = "export_outcomes.csv")
+
+#tableau metrics
+nom=paste("export_metrics_",nom_outcome,sep="")
+nom=paste(nom,".csv",sep="")
+write.csv(final_tableau_metrics,file = nom)
+
+#tableau var importance
+nom1=paste("export_var_imp_",nom_outcome,sep="")
+nom1=paste(nom1,".csv",sep="")
+write.csv(df_var_imp,file = nom1)
+
+
+```
+
+#STATISTIQUES DESCRIPTIVES
+
+##Compraraison var % et moyennes groupes
+
+```{r}
+library(gtsummary)
+#lister les variables utilisées dans df_train:
+var_select_ID=df_baked_train
+var_select=var_select_ID%>%select(-"ID_SEJ")
+var_select=names(var_select)#variables sans ID
+var_select_ID=names(var_select_ID)#nomns var avec ID
+
+#calcule des moyennes dans chaque groupe (groupes=outcome true et false)
+stat_descriptives_moyennes=df_total%>%
+  select(!!!rlang::syms(var_select))%>% #on ne calcule que les var selectionnées
+  gtsummary::tbl_summary(by=outcome,
+                         missing="no",
+                         statistic = list(all_continuous() ~ "{mean}",
+                                          all_categorical() ~ "{p} % "
+                                          )
+                         )%>%
+ 
+  add_overall(last = TRUE, col_label = "**Ensemble** (effectif total: {N})")%>%
+  add_difference()%>%
+  add_stat_label(location = "column")
+
+stat_descriptives_moyennes=as_hux_table(stat_descriptives_moyennes)
+stat_descriptives_moyennes <- stat_descriptives_moyennes %>% 
+    filter(!(label %in% 0:800))%>%filter(!(label %in% c("3-sample test for equality of proportions without continuity correction; Welch Two Sample t-test
+","CI = Confidence Interval")))
+nom_tableau=paste("export_moyennes_",nom_outcome,".csv",sep="")
+write.csv(stat_descriptives_moyennes, file=nom_tableau)
+
+```
+
+#comparaison val manquantes par groupes
+
+```{r}
+library(gtsummary)
+library(huxtable)
+df_num=df_total%>%
+  select(!!!rlang::syms(var_select_ID)) 
+numeric=df_num%>%
+  select(where(is.numeric))
+class(numeric$ID_SEJ)
+
+numeric=left_join(numeric,df_outcome)
+
+stat_descriptives_val_manquantes=numeric%>%gtsummary::tbl_summary(by=deces_service,
+                                  missing="no",
+                         statistic = list(all_continuous() ~ "{p_miss}"
+                                          #,all_categorical() ~ "{p_miss})"
+                                          )
+                         )%>%
+  add_overall(last = TRUE, col_label = "**Ensemble** (effectif total: {N})")%>%
+  add_stat_label(location = "column")
+
+stat_descriptives_val_manquantes=as_hux_table(stat_descriptives_val_manquantes)
+stat_descriptives_val_manquantes <- stat_descriptives_val_manquantes %>% 
+    filter(!(stat_label %in% c("n(%)","n (%)",NA)))
+nom_tableau=paste("export_val_manquantes_",nom_outcome,".csv",sep="")
+write.csv(stat_descriptives_val_manquantes, file=nom_tableau)
+
+```
+
+#Sauvegarde de l'environnement pour chaque outcome
+
+```{r}
+#Sauvegarde de l'environnement pour chaque outcome
+nom_sauvegarde=paste("~/export_sauvegarde_",nom_outcome,".RData",sep="")
+save.image(nom_sauvegarde)
+```
